@@ -1,0 +1,10 @@
+services:
+  finance:
+    volumes:
+      - ./data:/app/data
+      - ./fin:/app/fin
+      - ./web:/app/web
+      - ./server.py:/app/server.py
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"   # necessário no Windows para detetar alterações
+    command: uvicorn server:app --host 0.0.0.0 --port 8000 --reload

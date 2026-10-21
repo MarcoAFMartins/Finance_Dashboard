@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finanças</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f6f6f3;--card:#fff;--ink:#1c1c1a;--mute:#6b6b66;--line:#e4e4de;--accent:#1f6f66;--pos:#2a9d8f;--neg:#d4573b;--blue:#4a7bd0;--warn:#b7791f}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1d1d1b;--ink:#ecebe6;--mute:#9a9a92;--line:#2c2c29;--accent:#5fc4b6;--pos:#4fc3b3;--neg:#ef8a6e;--blue:#7ea4ec;--warn:#e0b25a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:5}
+header h1{font-size:17px;margin:0 12px 0 0;font-weight:650}
+nav{display:flex;gap:4px}
+nav button{background:none;border:0;color:var(--mute);padding:7px 12px;border-radius:8px;font:inherit;cursor:pointer}
+nav button.on{background:var(--bg);color:var(--ink);font-weight:600}
+.tools{margin-left:auto;display:flex;gap:14px;align-items:center;color:var(--mute);font-size:13px}
+select,input,button.btn{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 9px}
+button.btn{cursor:pointer}button.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+button.btn.primary:disabled{opacity:.5}
+main{max-width:1200px;margin:0 auto;padding:20px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card h3{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.big{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums}
+.sub{font-size:12.5px;color:var(--mute);margin-top:2px}
+.up{color:var(--pos)}.down{color:var(--neg)}.warn{color:var(--warn)}
+.row2{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));margin-top:12px}
+.chartbox{position:relative;height:280px}
+h2{font-size:14px;margin:0 0 10px;font-weight:650}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;color:var(--mute);font-weight:600;font-size:12px;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.badge{font-size:11px;padding:1px 6px;border-radius:99px;border:1px solid var(--line);color:var(--mute)}
+.badge.llm{color:var(--warn);border-color:var(--warn)}
+.bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--line);margin:8px 0 4px}
+.bar span{display:block;height:100%}
+.legend{display:flex;gap:12px;font-size:12px;color:var(--mute);flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:34px;text-align:center;color:var(--mute);cursor:pointer}
+.drop.over{border-color:var(--accent);color:var(--ink)}
+.bar-row{display:flex;gap:10px;align-items:center;margin:5px 0;font-size:13.5px}
+.bar-row .l{width:150px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-row .t{flex:1;background:var(--line);border-radius:4px;height:10px}
+.bar-row .t b{display:block;height:100%;background:var(--blue);border-radius:4px}
+.bar-row .v{width:84px;text-align:right;font-variant-numeric:tabular-nums}
+.empty{padding:60px 0;text-align:center;color:var(--mute)}
+.hidden{display:none}
+.res{font-size:13.5px;margin:6px 0}.res.err{color:var(--neg)}
+@media(max-width:640px){main{padding:12px}.row2{grid-template-columns:1fr}.bar-row .l{width:100px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Finanças</h1>
+  <nav id="nav">
+    <button data-t="overview" class="on">Visão geral</button>
+    <button data-t="tx">Movimentos</button>
+    <button data-t="ask">Perguntar</button>
+    <button data-t="assets">Reserva &amp; Invest.</button>
+    <button data-t="import">Importar</button>
+    <button data-t="config">Configuração</button>
+  </nav>
+  <div class="tools">
+    <label>Mês <select id="month"></select></label>
+    <label title="Que % do rendimento pões de lado para impostos e Segurança Social. 0 = esconder este KPI.">Impostos <input id="tax" type="number" min="0" max="60" step="1" value="25" style="width:58px">%</label>
+  </div>
+</header>
+<main>
+  <section id="overview"></section>
+  <section id="tx" class="hidden"></section>
+  <section id="ask" class="hidden"></section>
+  <section id="assets" class="hidden"></section>
+  <section id="import" class="hidden"></section>
+  <section id="config" class="hidden"></section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const eur = v => v == null ? '–' : new Intl.NumberFormat('pt-PT',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v);
+const eur2 = v => new Intl.NumberFormat('pt-PT',{style:'currency',currency:'EUR'}).format(v);
+const pct = v => v == null ? '–' : (v*100).toFixed(0)+'%';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const MONTHS = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+const mlabel = m => MONTHS[+m.slice(5)-1] + ' ' + m.slice(2,4);
+async function api(path, opts={}) {
+  const r = await fetch('/api'+path, opts);
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r.json();
+}
+const json = (method, body) => ({method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+
+const S = {month:null, meta:null, report:null, charts:{}};
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+function chart(id, cfg){
+  S.charts[id]?.destroy();
+  Chart.defaults.color = css('--mute'); Chart.defaults.borderColor = css('--line');
+  S.charts[id] = new Chart(document.getElementById(id), cfg);
+}
+
+// ---------- navegação ----------
+$('#nav').addEventListener('click', e => {
+  const t = e.target.dataset.t; if (!t) return;
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b === e.target));
+  document.querySelectorAll('main section').forEach(s => s.classList.toggle('hidden', s.id !== t));
+  LOADERS[t]();
+});
+$('#month').addEventListener('change', e => { S.month = e.target.value; refresh(); });
+$('#tax').addEventListener('change', () => loadOverview());
+
+function current(){ return document.querySelector('nav button.on').dataset.t; }
+const LOADERS = {overview:loadOverview, tx:loadTx, ask:loadAsk, assets:loadAssets, import:loadImport, config:loadConfig};
+function refresh(){ LOADERS[current()](); }
+
+async function ensureReport(){
+  const tax = (+$('#tax').value||0)/100;
+  S.report = await api(`/report?tax_pct=${tax}` + (S.month ? `&month=${S.month}` : ''));
+  const sel = $('#month');
+  if (!S.report.empty) {
+    sel.innerHTML = S.report.months.slice().reverse().map(m => `<option value="${m}">${mlabel(m)} 20${m.slice(2,4)}</option>`).join('');
+    sel.value = S.month = S.report.month;
+  }
+  return S.report;
+}
+
+// ---------- visão geral ----------
+function delta(v, goodWhenUp){
+  if (v == null) return '';
+  const good = goodWhenUp ? v >= 0 : v <= 0;
+  return `<span class="${good?'up':'down'}">${v>=0?'▲':'▼'} ${eur(Math.abs(v))}</span> vs mês anterior`;
+}
+async function loadOverview(){
+  const r = await ensureReport(), el = $('#overview');
+  if (r.empty) { el.innerHTML = `<div class="empty">Ainda sem dados. Vai a <b>Importar</b> e larga um extrato (Excel, CSV, PDF ou imagem).</div>`; return; }
+  const k = r.kpi;
+  const TN = {liquid:'Conta à ordem', savings:'Poupança', investment:'Investimento'};
+  const bal = r.balances.length ? `<div class="card" style="margin-top:12px"><h2>Saldos por conta</h2><table><tbody>${r.balances.map(b=>`<tr><td>${esc(b.account)}</td><td class="sub">${TN[b.type]||b.type}</td><td class="num">${eur2(b.balance)}</td></tr>`).join('')}</tbody></table></div>` : '';
+  const runway = k.runway_months == null ? '–' : k.runway_months.toFixed(1)+' meses';
+  const cards = [
+    ['Rendimento', eur(k.income), delta(k.d_income, true)],
+    ['Despesas', eur(k.expenses), delta(k.d_expenses, false)],
+    ['Poupança do mês', `<span class="${k.net>=0?'up':'down'}">${eur(k.net)}</span>`, `investido: ${eur(k.invested)}`],
+    ['Taxa de poupança', pct(k.savings_rate), `média 3 meses: ${pct(k.savings_rate_3m)}`],
+    ['Runway', runway, `saldo líquido ${eur(k.liquid)} · burn 3M ${eur(k.burn_3m)}/mês`],
+    ['Saldo das contas', eur(k.net_worth), 'bancos importados · sem reserva/investimentos'],
+    ['Despesas fixas', pct(k.fixed_pct_income), `${pct(k.fixed_pct_expenses)} das despesas · do rendimento`],
+    ['Volatilidade rendimento', k.income_cv_6m==null?'–':pct(k.income_cv_6m), 'variação (CV) últimos 6 meses'],
+    ...(+$('#tax').value > 0 ? [['A pôr de lado p/ impostos', eur(k.tax_reserve_month), `estimativa · acumulado no ano: ${eur(k.tax_reserve_ytd)}`]] : []),
+    ['Custos recorrentes', eur(k.recurring_annual), 'por ano (≥3 meses, valor estável)'],
+  ];
+  el.innerHTML = `
+    ${k.uncategorized ? `<div class="card warn" style="margin-bottom:12px">${k.uncategorized} movimento(s) sem categoria neste mês — revê em <b>Movimentos</b>.</div>`:''}
+    <div class="grid">${cards.map(c=>`<div class="card"><h3>${c[0]}</h3><div class="big">${c[1]}</div><div class="sub">${c[2]}</div></div>`).join('')}</div>
+    ${bal}
+    <div class="row2">
+      <div class="card"><h2>Rendimento vs despesas</h2><div class="chartbox"><canvas id="c1"></canvas></div></div>
+      <div class="card"><h2>Saldo total das contas</h2><div class="chartbox"><canvas id="c2"></canvas></div></div>
+    </div>
+    <div class="row2">
+      <div class="card"><h2>Despesas por categoria — ${mlabel(r.month)}</h2><div id="cats"></div></div>
+      <div class="card"><h2>Distribuição do rendimento (50/30/20)</h2>
+        <div class="bar"><span style="width:${Math.min(100,(k.needs_pct||0)*100)}%;background:var(--blue)"></span><span style="width:${Math.min(100,(k.wants_pct||0)*100)}%;background:var(--warn)"></span><span style="width:${Math.max(0,Math.min(100,(k.save_pct||0)*100))}%;background:var(--pos)"></span></div>
+        <div class="legend"><span><i style="background:var(--blue)"></i>Necessidades ${pct(k.needs_pct)} (alvo 50%)</span><span><i style="background:var(--warn)"></i>Desejos ${pct(k.wants_pct)} (30%)</span><span><i style="background:var(--pos)"></i>Poupança ${pct(k.save_pct)} (20%)</span></div>
+        <h2 style="margin-top:20px">Evolução das maiores categorias</h2><div class="chartbox" style="height:200px"><canvas id="c3"></canvas></div>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="card"><h2>Maiores despesas do mês</h2><table><tbody>${r.biggest.map(b=>`<tr><td>${b.date.slice(5)}</td><td>${esc(b.description)}<div class="sub">${esc(b.category)}</div></td><td class="num">${eur2(b.amount)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="card"><h2>Recorrentes detetados</h2>${r.recurring.length?`<table><tbody>${r.recurring.map(x=>`<tr><td>${esc(x.name)}<div class="sub">${esc(x.category)} · ${x.months} meses</div></td><td class="num">${eur2(x.monthly)}/mês<div class="sub">${eur(x.annual)}/ano</div></td></tr>`).join('')}</tbody></table>`:'<div class="sub">Precisa de pelo menos 3 meses de histórico.</div>'}</div>
+    </div>`;
+  const max = Math.max(...r.top_categories.map(c=>c.amount), 1);
+  $('#cats').innerHTML = r.top_categories.map(c=>`<div class="bar-row"><span class="l">${esc(c.category)}</span><span class="t"><b style="width:${c.amount/max*100}%"></b></span><span class="v">${eur(c.amount)}</span></div>`).join('') || '<div class="sub">Sem despesas neste mês.</div>';
+  const labels = r.monthly.map(m=>mlabel(m.month));
+  chart('c1',{type:'bar',data:{labels,datasets:[
+    {label:'Rendimento',data:r.monthly.map(m=>m.income),backgroundColor:css('--pos')},
+    {label:'Despesas',data:r.monthly.map(m=>m.expenses),backgroundColor:css('--neg')},
+    {label:'Investido',data:r.monthly.map(m=>m.invested),backgroundColor:css('--blue')}]},
+    options:{maintainAspectRatio:false,scales:{y:{ticks:{callback:v=>eur(v)}}}}});
+  chart('c2',{type:'line',data:{labels:r.net_worth_series.map(m=>mlabel(m.month)),datasets:[{label:'Saldo',data:r.net_worth_series.map(m=>m.value),borderColor:css('--accent'),backgroundColor:css('--accent')+'22',fill:true,tension:.25}]},
+    options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>eur(v)}}}}});
+  const pal = [css('--blue'),css('--pos'),css('--warn'),css('--neg'),css('--mute')];
+  chart('c3',{type:'line',data:{labels:r.category_trend.months.map(mlabel),datasets:Object.entries(r.category_trend.series).map(([n,d],i)=>({label:n,data:d,borderColor:pal[i%5],tension:.25}))},
+    options:{maintainAspectRatio:false,scales:{y:{ticks:{callback:v=>eur(v)}}}}});
+}
+
+// ---------- movimentos ----------
+async function loadTx(){
+  await ensureReport();
+  S.meta = await api('/meta');
+  const el = $('#tx');
+  if (!el.dataset.ready) {
+    el.dataset.ready = 1;
+    el.innerHTML = `<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <select id="fcat"><option value="">Todas as categorias</option>${S.meta.categories.map(c=>`<option>${esc(c.name)}</option>`).join('')}</select>
+      <select id="facct"></select>
+      <input id="fq" placeholder="Pesquisar descrição…" style="flex:1;min-width:160px">
+      <label style="align-self:center;color:var(--mute);font-size:13px"><input id="fall" type="checkbox"> todos os meses</label>
+      <button class="btn" id="recat">Recategorizar</button></div>
+      <div id="txbody"></div></div>`;
+    ['fcat','facct','fq','fall'].forEach(i => $('#'+i).addEventListener('input', renderTx));
+    $('#recat').onclick = async () => { await api('/recategorize',{method:'POST'}); renderTx(); };
+  }
+  const fa = $('#facct'), prev = fa.value;
+  fa.innerHTML = '<option value="">Todos os bancos/contas</option>' + S.meta.accounts.map(a=>`<option>${esc(a.name)}</option>`).join('');
+  fa.value = prev;
+  renderTx();
+}
+async function renderTx(){
+  const p = new URLSearchParams();
+  if (!$('#fall').checked && S.month) p.set('month', S.month);
+  if ($('#fcat').value) p.set('category', $('#fcat').value);
+  if ($('#facct').value) p.set('account', $('#facct').value);
+  if ($('#fq').value) p.set('q', $('#fq').value);
+  const rows = await api('/transactions?'+p);
+  const opts = S.meta.categories.map(c=>c.name);
+  $('#txbody').innerHTML = `<table><thead><tr><th>Data</th><th>Descrição</th><th>Conta</th><th>Categoria</th><th class="num">Valor</th></tr></thead><tbody>${rows.map(t=>`
+    <tr><td>${t.date}</td><td>${esc(t.description)}</td><td class="sub">${esc(t.account)}</td>
+    <td><select data-id="${t.id}" data-d="${esc(t.description)}">${opts.map(o=>`<option ${o===t.category?'selected':''}>${esc(o)}</option>`).join('')}</select>
+      ${t.cat_source==='llm'?'<span class="badge llm">LLM</span>':t.cat_source==='manual'?'<span class="badge">manual</span>':''}</td>
+    <td class="num ${t.amount<0?'':'up'}">${eur2(t.amount)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">Sem movimentos.</td></tr>'}</tbody></table>`;
+  $('#txbody').querySelectorAll('select').forEach(s => s.onchange = async () => {
+    const rule = confirm(`Aplicar "${s.value}" também a futuros movimentos com esta descrição?\n\n${s.dataset.d}`);
+    await api('/transactions/'+s.dataset.id, json('PATCH',{category:s.value, create_rule:rule}));
+    renderTx();
+  });
+}
+
+// ---------- perguntar ----------
+async function loadAsk(){
+  const el = $('#ask');
+  if (!S.meta) S.meta = await api('/meta');
+  if (el.dataset.ready) return;
+  el.dataset.ready = 1;
+  const on = !!S.meta.llm;
+  el.innerHTML = `<div class="card">
+    <div style="display:flex;gap:8px"><input id="q" placeholder="ex.: quanto gastei em restauração nos últimos 3 meses?" style="flex:1" ${on?'':'disabled'}>
+    <button class="btn primary" id="qgo" ${on?'':'disabled'}>Perguntar</button></div>
+    ${on?`<div class="sub" style="margin-top:6px">Modelo local: ${esc(S.meta.llm)}. Verifica sempre a query usada.</div>`
+        :`<div class="sub warn" style="margin-top:8px">LLM local desligado. Arranca com <code>FIN_LLM=qwen2.5:7b-instruct</code> (ver README).</div>`}
+    <div id="qout" style="margin-top:14px"></div></div>`;
+  const go = async () => {
+    const q = $('#q').value.trim(); if (!q) return;
+    $('#qgo').disabled = true; $('#qout').innerHTML = '<div class="sub">A pensar…</div>';
+    try {
+      const r = await api('/ask', json('POST',{question:q}));
+      $('#qout').innerHTML = (r.error ? `<div class="res err">${esc(r.error)}</div>` : '')
+        + (r.answer ? `<div style="font-size:16px;margin-bottom:10px">${esc(r.answer)}</div>` : '')
+        + (r.sql ? `<details ${r.error?'open':''}><summary class="sub" style="cursor:pointer">Query usada</summary><pre style="white-space:pre-wrap;background:var(--bg);padding:10px;border-radius:8px;font-size:12.5px">${esc(r.sql)}</pre></details>` : '')
+        + (r.rows ? (r.rows.length ? `<div style="overflow:auto;margin-top:8px"><table><thead><tr>${r.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${r.rows.map(row=>`<tr>${row.map(v=>`<td class="${typeof v==='number'?'num':''}">${typeof v==='number'?(Math.round(v*100)/100).toLocaleString('pt-PT'):esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="sub">Sem linhas.</div>') : '');
+    } catch(e){ $('#qout').innerHTML = `<div class="res err">${esc(e.message)}</div>`; }
+    $('#qgo').disabled = false;
+  };
+  $('#qgo').onclick = go;
+  $('#q').addEventListener('keydown', e => { if (e.key==='Enter') go(); });
+}
+
+// ---------- reserva & investimentos ----------
+async function loadAssets(){
+  const d = await api('/assets'), el = $('#assets');
+  const t = d.totals, today = new Date().toISOString().slice(0,10);
+  const kn = {reserve:'Reserva', investment:'Investimento'};
+  const card = (h, v, s) => `<div class="card"><h3>${h}</h3><div class="big">${v}</div><div class="sub">${s}</div></div>`;
+  el.innerHTML = `
+    <div class="sub" style="margin-bottom:10px">Separado de propósito: este dinheiro não entra nos KPIs nem no saldo da visão geral. Atualiza os valores quando quiseres.</div>
+    <div class="grid">
+      ${card('Total', eur(t.total), 'reserva + investimentos')}
+      ${card('Reserva', eur(t.reserve), t.weighted_tanb==null ? 'sem TANB definida' : `TANB média ${t.weighted_tanb.toFixed(2)}%`)}
+      ${card('Investimentos', eur(t.investment), t.gain==null ? 'sem capital aplicado indicado' : `ganho ${eur(t.gain)} (${pct(t.gain_pct)})`)}
+      ${card('Juros estimados', eur(t.est_interest_year), 'por ano, bruto (valor × TANB)')}
+    </div>
+    ${d.series.length>=2 ? `<div class="card" style="margin-top:12px"><h2>Evolução</h2><div class="chartbox"><canvas id="c4"></canvas></div></div>` : ''}
+    <div id="alist" style="margin-top:12px;display:grid;gap:12px"></div>
+    <div class="card" style="margin-top:12px"><h2>Adicionar ativo</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="an" placeholder="Nome (ex.: Conta Reserva)"><input id="ai" placeholder="Banco / plataforma">
+        <select id="ak"><option value="reserve">Reserva (depósito/poupança)</option><option value="investment">Investimento</option></select>
+        <input id="at" type="number" step="0.01" placeholder="TANB %" style="width:100px">
+        <button class="btn primary" id="aadd">Adicionar</button></div></div>`;
+  $('#alist').innerHTML = d.assets.map(a => `
+    <div class="card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <div><b>${esc(a.name)}</b> <span class="badge">${kn[a.kind]}</span>
+        <div class="sub">${esc(a.institution||'')}${a.tanb!=null?` · TANB ${a.tanb}%`:''}</div></div>
+      <div style="text-align:right"><div class="big">${a.value==null?'–':eur2(a.value)}</div>
+        <div class="sub">${a.as_of?`a ${a.as_of}`:'sem valor ainda'}${a.est_interest_year!=null?` · ~${eur2(a.est_interest_year)}/ano de juros`:''}${a.gain!=null?` · ganho ${eur2(a.gain)} (${pct(a.gain_pct)})`:''}</div></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+        <input type="date" data-d="${a.id}" value="${today}">
+        <input type="number" step="0.01" placeholder="Valor atual €" data-v="${a.id}" style="width:130px">
+        ${a.kind==='investment'?`<input type="number" step="0.01" placeholder="Capital aplicado €" data-i="${a.id}" style="width:150px">`:''}
+        <button class="btn primary" data-save="${a.id}">Guardar valor</button>
+        ${a.kind==='reserve'?`<button class="btn" data-edit="${a.id}">TANB</button>`:''}
+        <button class="btn" data-del="${a.id}">Remover</button></div>
+      ${a.history.length>1?`<details style="margin-top:8px"><summary class="sub" style="cursor:pointer">Histórico (${a.history.length})</summary><table><tbody>${a.history.slice().reverse().map(h=>`<tr><td>${h.date}</td><td class="num">${eur2(h.value)}</td><td class="num">${h.invested!=null?eur2(h.invested):''}</td><td class="num"><button class="btn" data-hd="${h.id}">×</button></td></tr>`).join('')}</tbody></table></details>`:''}
+    </div>`).join('') || '<div class="card sub">Ainda sem ativos. Adiciona abaixo, por exemplo a tua conta reserva com a TANB.</div>';
+  const byId = Object.fromEntries(d.assets.map(a=>[a.id,a]));
+  el.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.save, v = el.querySelector(`[data-v="${id}"]`).value, i = el.querySelector(`[data-i="${id}"]`)?.value;
+    if (v === '') return;
+    await api(`/assets/${id}/snapshots`, json('POST', {date: el.querySelector(`[data-d="${id}"]`).value, value: +v, invested: (i === undefined || i === '') ? null : +i}));
+    loadAssets();
+  });
+  el.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
+    const a = byId[b.dataset.edit];
+    const t = prompt(`TANB (%) de "${a.name}" — vazio para nenhuma:`, a.tanb ?? '');
+    if (t === null) return;
+    await api('/assets/'+a.id, json('PUT', {name:a.name, institution:a.institution, kind:a.kind, tanb: t.trim()==='' ? null : +t.replace(',','.'), note:a.note}));
+    loadAssets();
+  });
+  el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (confirm(`Remover "${byId[b.dataset.del].name}" e todo o histórico?`)) { await api('/assets/'+b.dataset.del, {method:'DELETE'}); loadAssets(); }
+  });
+  el.querySelectorAll('[data-hd]').forEach(b => b.onclick = async () => { await api('/snapshots/'+b.dataset.hd, {method:'DELETE'}); loadAssets(); });
+  $('#aadd').onclick = async () => {
+    const name = $('#an').value.trim(); if (!name) return;
+    try {
+      await api('/assets', json('POST', {name, institution: $('#ai').value.trim() || null, kind: $('#ak').value, tanb: $('#at').value === '' ? null : +$('#at').value}));
+      loadAssets();
+    } catch(e){ alert('Não foi possível adicionar: ' + e.message); }
+  };
+  if (d.series.length >= 2) chart('c4', {type:'line', data:{labels:d.series.map(s=>s.date), datasets:[
+    {label:'Total', data:d.series.map(s=>s.total), borderColor:css('--accent'), tension:.25},
+    {label:'Reserva', data:d.series.map(s=>s.reserve), borderColor:css('--blue'), tension:.25},
+    {label:'Investimentos', data:d.series.map(s=>s.investment), borderColor:css('--warn'), tension:.25}]},
+    options:{maintainAspectRatio:false, scales:{y:{ticks:{callback:v=>eur(v)}}}}});
+}
+
+// ---------- importar ----------
+async function loadImport(){
+  const el = $('#import');
+  if (!S.meta) S.meta = await api('/meta');
+  const accts = S.meta.accounts.map(a=>a.name);
+  el.innerHTML = `<div class="card">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      <label>Banco / conta <input id="acct" list="al" placeholder="ex.: Millennium" value=""></label><datalist id="al">${accts.map(a=>`<option value="${esc(a)}">`).join('')}</datalist>
+      <label>Tipo <select id="atype"><option value="liquid">Conta à ordem</option><option value="savings">Poupança</option><option value="investment">Investimento</option></select></label>
+      <span class="sub">OCR: ${esc(S.meta.ocr_lang)} · LLM local: ${S.meta.llm?esc(S.meta.llm):'desligado'}</span></div>
+    <label class="drop" id="drop" style="display:block">Larga aqui Excel, CSV, PDF ou imagem (ou clica)
+      <input id="files" type="file" multiple accept=".xlsx,.xls,.xlsm,.csv,.pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff" class="hidden"></label>
+    <div id="results"></div></div>
+    <div class="card" style="margin-top:12px"><h2>Histórico de importações</h2><div id="hist"></div></div>`;
+  const drop = $('#drop');
+  ['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault(); drop.classList.add('over')}));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault(); drop.classList.remove('over')}));
+  drop.addEventListener('drop', e => upload(e.dataTransfer.files));
+  $('#files').addEventListener('change', e => upload(e.target.files));
+  loadHist();
+}
+async function upload(files){
+  if (!files.length) return;
+  if (!$('#acct').value.trim()) { $('#results').innerHTML = '<div class="res err">Indica primeiro o banco/conta a que este ficheiro pertence.</div>'; return; }
+  const fd = new FormData();
+  [...files].forEach(f => fd.append('files', f));
+  fd.append('account', $('#acct').value); fd.append('account_type', $('#atype').value);
+  $('#results').innerHTML = '<div class="res">A processar (OCR pode demorar alguns segundos por página)…</div>';
+  try {
+    const res = await api('/import', {method:'POST', body:fd});
+    $('#results').innerHTML = res.map(r => r.status==='error' ? `<div class="res err">✕ ${esc(r.file)}: ${esc(r.error)}</div>`
+      : r.status==='duplicate' ? `<div class="res">↺ ${esc(r.file)}: já importado, ignorado</div>`
+      : `<div class="res">✓ ${esc(r.file)} — ${r.rows_new} novos de ${r.rows_found} (${esc(r.method)})</div>`).join('');
+    S.meta = await api('/meta'); loadHist();
+  } catch(e){ $('#results').innerHTML = `<div class="res err">${esc(e.message)}</div>`; }
+}
+async function loadHist(){
+  const h = await api('/imports');
+  $('#hist').innerHTML = h.length ? `<table><thead><tr><th>Ficheiro</th><th>Conta</th><th>Método</th><th class="num">Novos</th><th></th></tr></thead><tbody>${h.map(i=>`<tr><td>${esc(i.filename)}<div class="sub">${esc(i.imported_at)}</div></td><td>${esc(i.account)}</td><td><span class="badge">${esc(i.method)}</span></td><td class="num">${i.rows_new}/${i.rows_found}</td><td class="num"><button class="btn" data-ren="${i.id}" data-n="${esc(i.filename)}">Renomear</button> <button class="btn" data-del="${i.id}">Remover</button></td></tr>`).join('')}</tbody></table>` : '<div class="sub">Nada importado ainda.</div>';
+  $('#hist').querySelectorAll('[data-ren]').forEach(b => b.onclick = async () => {
+    const n = prompt('Novo nome para este ficheiro:', b.dataset.n);
+    if (n && n.trim() && n !== b.dataset.n) { await api('/imports/'+b.dataset.ren, json('PATCH',{filename:n.trim()})); loadHist(); }
+  });
+  $('#hist').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (confirm('Remover esta importação e os respetivos movimentos?')) { await api('/imports/'+b.dataset.del,{method:'DELETE'}); loadHist(); }
+  });
+}
+
+// ---------- configuração ----------
+async function loadConfig(){
+  S.meta = await api('/meta');
+  const rules = await api('/rules');
+  const cats = S.meta.categories.map(c=>c.name);
+  $('#config').innerHTML = `
+    <div class="card"><h2>Contas</h2>${S.meta.accounts.length?`<table><thead><tr><th>Conta</th><th>Tipo</th><th class="num">Saldo inicial (€)</th><th></th></tr></thead><tbody>${S.meta.accounts.map(a=>`<tr>
+      <td>${esc(a.name)}</td>
+      <td><select data-t="${a.id}"><option value="liquid" ${a.type==='liquid'?'selected':''}>Conta à ordem</option><option value="savings" ${a.type==='savings'?'selected':''}>Poupança</option><option value="investment" ${a.type==='investment'?'selected':''}>Investimento</option></select></td>
+      <td class="num"><input type="number" step="0.01" value="${a.opening_balance}" data-o="${a.id}" style="width:120px;text-align:right"></td>
+      <td class="num"><button class="btn" data-s="${a.id}">Guardar</button></td></tr>`).join('')}</tbody></table>
+      <div class="sub" style="margin-top:8px">O saldo inicial é o saldo da conta antes do primeiro movimento importado. Sem ele, runway e património ficam errados.</div>`:'<div class="sub">Sem contas ainda — importa um extrato.</div>'}</div>
+    <div class="card" style="margin-top:12px"><h2>Regras de categorização</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="rp" placeholder="texto a procurar (ex.: continente)"><select id="rc">${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select><button class="btn primary" id="radd">Adicionar</button></div>
+      <table><tbody>${rules.map(r=>`<tr><td>${esc(r.pattern)}</td><td>${esc(r.category)}</td><td class="num"><button class="btn" data-r="${r.id}">×</button></td></tr>`).join('')}</tbody></table></div>`;
+  document.querySelectorAll('[data-s]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.s;
+    await api('/accounts/'+id, json('PUT',{opening_balance:+document.querySelector(`[data-o="${id}"]`).value||0, type:document.querySelector(`[data-t="${id}"]`).value}));
+    b.textContent = 'Guardado ✓';
+  });
+  $('#radd').onclick = async () => { if ($('#rp').value.trim()) { await api('/rules', json('POST',{pattern:$('#rp').value, category:$('#rc').value})); loadConfig(); } };
+  document.querySelectorAll('[data-r]').forEach(b => b.onclick = async () => { await api('/rules/'+b.dataset.r,{method:'DELETE'}); loadConfig(); });
+}
+
+loadOverview();
+</script>
+</body>
+</html>

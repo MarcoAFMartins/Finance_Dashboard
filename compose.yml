@@ -1,0 +1,15 @@
+services:
+  finance:
+    build: .
+    container_name: finance-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8010:8000"        # só acessível nesta máquina
+    volumes:
+      - ./data:/app/data             # BD e ficheiros ficam no host
+    environment:
+      # LLM local (Ollama a correr no host). Comenta FIN_LLM para desligar.
+      FIN_LLM: ${FIN_LLM:-qwen2.5:7b-instruct}
+      FIN_LLM_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # necessário em Linux; no Docker Desktop já existe
