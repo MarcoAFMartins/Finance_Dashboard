@@ -7,3 +7,5 @@ data/processed/
 # dados financeiros reais nunca vão para o repo
 data/real/
 *.env
+
+data/*
