@@ -1,11 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
-data/*.db
-data/inbox/
-data/processed/
-# dados financeiros reais nunca vão para o repo
-data/real/
 *.env
 
+# Nada em data/ vai para o repo (BD, extratos reais, inbox...), excepto os exemplos sintéticos.
 data/*
+!data/samples/
