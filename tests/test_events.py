@@ -1,0 +1,200 @@
+"""Eventos + simulação: migração, agregação por evento, projeção de saldo e API.  python tests/test_events.py"""
+import os
+import sqlite3
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+TMP = Path(tempfile.mkdtemp())
+os.environ["FIN_DB"] = str(TMP / "test.db")
+os.environ.pop("FIN_LLM", None)
+
+from fin import db, events, ingest, kpis  # noqa: E402
+from fin import simulate as sim  # noqa: E402
+
+SAMPLES = ROOT / "data" / "samples"
+
+OLD_SCHEMA = """
+CREATE TABLE accounts(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, type TEXT NOT NULL DEFAULT 'liquid', opening_balance REAL NOT NULL DEFAULT 0);
+CREATE TABLE categories(name TEXT PRIMARY KEY, kind TEXT NOT NULL, bucket TEXT NOT NULL DEFAULT 'other', fixed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE rules(id INTEGER PRIMARY KEY, pattern TEXT UNIQUE NOT NULL, category TEXT NOT NULL REFERENCES categories(name));
+CREATE TABLE imports(id INTEGER PRIMARY KEY, filename TEXT, file_hash TEXT NOT NULL, method TEXT, account TEXT, rows_found INTEGER, rows_new INTEGER, imported_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(file_hash, account));
+CREATE TABLE transactions(id INTEGER PRIMARY KEY, uid TEXT UNIQUE NOT NULL, date TEXT NOT NULL, description TEXT NOT NULL, amount REAL NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES accounts(id), category TEXT NOT NULL DEFAULT 'Sem categoria', cat_source TEXT NOT NULL DEFAULT 'none',
+    import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE);
+CREATE VIEW v_tx AS SELECT id, date FROM transactions;
+INSERT INTO accounts(name) VALUES ('Antiga');
+INSERT INTO transactions(uid, date, description, amount, account_id) VALUES ('u1', '2026-01-05', 'ANTIGO', -10, 1);
+"""
+
+
+def test_migration():
+    """Uma base criada antes dos eventos ganha event_id, mantém os dados e a vista nova."""
+    old = TMP / "old.db"
+    con = sqlite3.connect(old)
+    con.executescript(OLD_SCHEMA)
+    con.commit()
+    con.close()
+    prev = os.environ["FIN_DB"]
+    os.environ["FIN_DB"] = str(old)
+    try:
+        db.init()
+        db.init()  # idempotente
+        with db.connect() as c:
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(transactions)")}
+            assert "event_id" in cols
+            row = c.execute("SELECT description, event_id, event FROM v_tx").fetchone()
+            assert row["description"] == "ANTIGO" and row["event_id"] is None and row["event"] is None
+    finally:
+        os.environ["FIN_DB"] = prev
+    print("migração OK")
+
+
+def load(c):
+    return db.load_transactions(c), db.load_table(c, "categories"), db.load_table(c, "accounts")
+
+
+def run_sim(c, **kw):
+    tx, cats, acc = load(c)
+    return sim.run(tx, cats, acc, events.planned_for_sim(c), **kw)
+
+
+def main():
+    test_migration()
+    db.init()
+    with db.connect() as c:
+        for f, acct in [("extrato_abr_ago.xlsx", "Conta"), ("cartao_junho.csv", "Cartão")]:
+            assert ingest.ingest_file(c, SAMPLES / f, acct)["rows_new"] > 0
+
+        # --- eventos: associar movimentos de categorias diferentes ---
+        c.execute("INSERT INTO events(name, start_date, end_date, budget) VALUES ('Viagem', '2026-06-10', '2026-06-20', 600)")
+        eid = c.execute("SELECT id FROM events WHERE name='Viagem'").fetchone()["id"]
+        sug = events.suggestions(c, eid)
+        assert sug and all("2026-06-10" <= s["date"] <= "2026-06-20" and s["amount"] < 0 for s in sug)
+        cats_in_sug = {s["category"] for s in sug}
+        assert len(cats_in_sug) >= 2, "o evento deve atravessar categorias"
+        ids = [s["id"] for s in sug]
+        assert events.assign(c, ids, eid) == len(ids)
+        assert events.suggestions(c, eid) == [], "já associados não voltam a ser sugeridos"
+        ev = events.list_events(c)["events"][0]
+        assert ev["tx_count"] == len(ids)
+        assert abs(ev["spent"] - (-sum(s["amount"] for s in sug))) < 0.01
+        assert abs(sum(x["amount"] for x in ev["by_category"]) - ev["spent"]) < 0.01
+        try:
+            events.assign(c, ids, 9999)
+            raise AssertionError("devia falhar com evento inexistente")
+        except LookupError:
+            pass
+
+        # --- simulação sem itens: saldo inicial = liquid dos KPIs; base não conta movimentos de eventos ---
+        tx, cats, acc = load(c)
+        liquid = kpis.report(tx, cats, acc)["kpi"]["liquid"]
+        r0 = run_sim(c, horizon_months=3)
+        assert abs(r0["start_balance"] - liquid) < 0.01, (r0["start_balance"], liquid)
+        base_with = r0["baseline"]["monthly_expenses"]
+        events.assign(c, ids, None)
+        base_without = run_sim(c, horizon_months=3)["baseline"]["monthly_expenses"]
+        events.assign(c, ids, eid)
+        assert base_without >= base_with, "movimentos de eventos saem da base"
+        assert r0["planned_total"] == 0 and len(r0["series"]["dates"]) == len(r0["series"]["balance"]) > 80
+
+        # --- itens planeados: ponderação por certeza ---
+        start = r0["start_date"]
+        d = lambda n: (__import__("datetime").date.fromisoformat(start) + __import__("datetime").timedelta(days=n)).isoformat()  # noqa: E731
+        c.execute("INSERT INTO events(name, start_date, end_date) VALUES ('Algarve', ?, ?)", (d(20), d(25)))
+        aid = c.execute("SELECT id FROM events WHERE name='Algarve'").fetchone()["id"]
+        for desc, amt, day, cert, cat in [
+            ("Alojamento", -300, 21, "certain", "Viagens"),
+            ("Jantares", -200, 22, "likely", "Restauração"),
+            ("Extras", -100, 23, "maybe", None),
+            ("Reembolso", 50, 30, "likely", None),
+            ("Já passou", -999, -3, "certain", None),
+        ]:
+            c.execute("INSERT INTO planned_items(event_id, description, amount, date, category, certainty) VALUES (?,?,?,?,?,?)", (aid, desc, amt, d(day), cat, cert))
+        exp = run_sim(c, horizon_months=3)
+        assert abs(exp["planned_total"] - (-300 - 140 - 30 + 35)) < 0.01, exp["planned_total"]
+        assert abs((exp["final_balance"] - r0["final_balance"]) - exp["planned_total"]) < 0.02
+        assert exp["ignored"] == 1, "itens com data passada ficam de fora"
+        pes = run_sim(c, horizon_months=3, mode="pessimistic")
+        assert abs(pes["planned_total"] - (-600)) < 0.01, "pessimista: despesas inteiras, entrada incerta a 0"
+        assert pes["final_balance"] < exp["final_balance"]
+        assert exp["impact"][0]["event"] == "Algarve"
+
+        # --- cenário: excluir o evento ---
+        c.execute("UPDATE events SET include_in_sim=0 WHERE id=?", (aid,))
+        off = run_sim(c, horizon_months=3)
+        assert off["planned_total"] == 0 and abs(off["final_balance"] - r0["final_balance"]) < 0.01
+        c.execute("UPDATE events SET include_in_sim=1 WHERE id=?", (aid,))
+
+        # --- limite ---
+        high = run_sim(c, horizon_months=3, floor=exp["min_balance"] + 1000)
+        assert high["below_floor_date"] is not None
+        low = run_sim(c, horizon_months=3, floor=exp["min_balance"] - 1000)
+        assert low["below_floor_date"] is None
+
+        # --- apagar evento: movimentos ficam, itens planeados vão com ele ---
+        n_tx = c.execute("SELECT COUNT(*) n FROM transactions").fetchone()["n"]
+        c.execute("DELETE FROM events WHERE id=?", (aid,))
+        assert c.execute("SELECT COUNT(*) n FROM planned_items").fetchone()["n"] == 0
+        c.execute("DELETE FROM events WHERE id=?", (eid,))
+        assert c.execute("SELECT COUNT(*) n FROM transactions").fetchone()["n"] == n_tx
+        assert c.execute("SELECT COUNT(*) n FROM transactions WHERE event_id IS NOT NULL").fetchone()["n"] == 0
+    print("eventos + simulação OK")
+    test_api()
+    print("TUDO OK")
+
+
+def test_api():
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        print("API: saltado (falta httpx)")
+        return
+    import server
+
+    cl = TestClient(server.app)
+    with db.connect() as c:
+        ingest.ingest_file(c, SAMPLES / "extrato_abr_ago.xlsx", "Conta")
+    start = cl.get("/api/simulate?horizon_months=2").json()["start_date"]
+    from datetime import date, timedelta
+
+    when = (date.fromisoformat(start) + timedelta(days=10)).isoformat()
+
+    r = cl.post("/api/events", json={"name": "Concerto", "start_date": when, "end_date": when, "budget": 120})
+    assert r.status_code == 200, r.text
+    eid = r.json()["id"]
+    assert cl.post("/api/events", json={"name": "Concerto"}).status_code == 409
+    assert cl.post("/api/events", json={"name": "X", "start_date": "2026-02-30"}).status_code == 422
+    assert cl.post("/api/events", json={"name": "X", "start_date": "2026-05-02", "end_date": "2026-05-01"}).status_code == 422
+
+    p = {"event_id": eid, "description": "Bilhetes", "amount": 80, "date": when, "category": "Lazer", "certainty": "likely"}
+    assert cl.post("/api/planned", json=p).status_code == 200
+    assert cl.post("/api/planned", json={**p, "amount": -5}).status_code == 422
+    assert cl.post("/api/planned", json={**p, "category": "Inventada"}).status_code == 422
+    assert cl.post("/api/planned", json={**p, "event_id": 9999}).status_code == 422
+    assert cl.get("/api/simulate?mode=xpto").status_code == 422
+
+    s = cl.get("/api/simulate?horizon_months=2").json()
+    assert abs(s["planned_total"] - (-80 * 0.7)) < 0.01 and s["items"][0]["amount"] == -80
+    lst = cl.get("/api/events").json()
+    assert lst["events"][0]["planned_total"] == 80 and lst["loose"] == []
+
+    # atribuição em lote + filtro por evento + vista para o Perguntar
+    tx = cl.get("/api/transactions?limit=3").json()
+    ids = [t["id"] for t in tx]
+    assert cl.post("/api/transactions/event", json={"tx_ids": ids, "event_id": eid}).json()["updated"] == 3
+    assert len(cl.get("/api/transactions", params={"event_id": eid}).json()) == 3
+    assert cl.post("/api/transactions/event", json={"tx_ids": ids, "event_id": 9999}).status_code == 404
+    from fin import ask
+    cols, rows = ask.run_readonly("SELECT event, COUNT(*) FROM v_tx WHERE event IS NOT NULL GROUP BY event")
+    assert rows == [["Concerto", 3]], rows
+
+    assert cl.delete(f"/api/events/{eid}").status_code == 200
+    assert cl.get("/api/events").json() == {"events": [], "loose": []}
+    print("API OK")
+
+
+if __name__ == "__main__":
+    main()

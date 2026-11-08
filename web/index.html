@@ -58,6 +58,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
   <nav id="nav">
     <button data-t="overview" class="on">Visão geral</button>
     <button data-t="tx">Movimentos</button>
+    <button data-t="sim">Simular</button>
     <button data-t="ask">Perguntar</button>
     <button data-t="assets">Reserva &amp; Invest.</button>
     <button data-t="import">Importar</button>
@@ -71,6 +72,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 <main>
   <section id="overview"></section>
   <section id="tx" class="hidden"></section>
+  <section id="sim" class="hidden"></section>
   <section id="ask" class="hidden"></section>
   <section id="assets" class="hidden"></section>
   <section id="import" class="hidden"></section>
@@ -111,7 +113,7 @@ $('#month').addEventListener('change', e => { S.month = e.target.value; refresh(
 $('#tax').addEventListener('change', () => loadOverview());
 
 function current(){ return document.querySelector('nav button.on').dataset.t; }
-const LOADERS = {overview:loadOverview, tx:loadTx, ask:loadAsk, assets:loadAssets, import:loadImport, config:loadConfig};
+const LOADERS = {overview:loadOverview, tx:loadTx, sim:loadSim, ask:loadAsk, assets:loadAssets, import:loadImport, config:loadConfig};
 function refresh(){ LOADERS[current()](); }
 
 async function ensureReport(){
@@ -195,16 +197,21 @@ async function loadTx(){
     el.innerHTML = `<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
       <select id="fcat"><option value="">Todas as categorias</option>${S.meta.categories.map(c=>`<option>${esc(c.name)}</option>`).join('')}</select>
       <select id="facct"></select>
+      <select id="fev"></select>
       <input id="fq" placeholder="Pesquisar descrição…" style="flex:1;min-width:160px">
       <label style="align-self:center;color:var(--mute);font-size:13px"><input id="fall" type="checkbox"> todos os meses</label>
       <button class="btn" id="recat">Recategorizar</button></div>
       <div id="txbody"></div></div>`;
-    ['fcat','facct','fq','fall'].forEach(i => $('#'+i).addEventListener('input', renderTx));
+    ['fcat','facct','fev','fq','fall'].forEach(i => $('#'+i).addEventListener('input', renderTx));
     $('#recat').onclick = async () => { await api('/recategorize',{method:'POST'}); renderTx(); };
   }
   const fa = $('#facct'), prev = fa.value;
   fa.innerHTML = '<option value="">Todos os bancos/contas</option>' + S.meta.accounts.map(a=>`<option>${esc(a.name)}</option>`).join('');
   fa.value = prev;
+  S.events = (await api('/events')).events;
+  const fe = $('#fev'), prevE = fe.value;
+  fe.innerHTML = '<option value="">Todos os eventos</option>' + S.events.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('');
+  fe.value = prevE;
   renderTx();
 }
 async function renderTx(){
@@ -212,19 +219,172 @@ async function renderTx(){
   if (!$('#fall').checked && S.month) p.set('month', S.month);
   if ($('#fcat').value) p.set('category', $('#fcat').value);
   if ($('#facct').value) p.set('account', $('#facct').value);
+  if ($('#fev').value) p.set('event_id', $('#fev').value);
   if ($('#fq').value) p.set('q', $('#fq').value);
   const rows = await api('/transactions?'+p);
   const opts = S.meta.categories.map(c=>c.name);
-  $('#txbody').innerHTML = `<table><thead><tr><th>Data</th><th>Descrição</th><th>Conta</th><th>Categoria</th><th class="num">Valor</th></tr></thead><tbody>${rows.map(t=>`
-    <tr><td>${t.date}</td><td>${esc(t.description)}</td><td class="sub">${esc(t.account)}</td>
+  const evs = S.events || [];
+  $('#txbody').innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <span class="sub" id="nsel">0 selecionados</span>
+      <select id="bev"><option value="">Tirar do evento</option>${evs.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select>
+      <button class="btn primary" id="bgo" disabled>Aplicar aos selecionados</button>
+      ${evs.length ? '' : '<span class="sub">Ainda sem eventos — cria-os no separador Simular.</span>'}</div>
+    <table><thead><tr><th><input type="checkbox" id="selall"></th><th>Data</th><th>Descrição</th><th>Conta</th><th>Categoria</th><th class="num">Valor</th></tr></thead><tbody>${rows.map(t=>`
+    <tr><td><input type="checkbox" data-sel="${t.id}"></td><td>${t.date}</td><td>${esc(t.description)}${t.event?` <span class="badge">${esc(t.event)}</span>`:''}</td><td class="sub">${esc(t.account)}</td>
     <td><select data-id="${t.id}" data-d="${esc(t.description)}">${opts.map(o=>`<option ${o===t.category?'selected':''}>${esc(o)}</option>`).join('')}</select>
       ${t.cat_source==='llm'?'<span class="badge llm">LLM</span>':t.cat_source==='manual'?'<span class="badge">manual</span>':''}</td>
-    <td class="num ${t.amount<0?'':'up'}">${eur2(t.amount)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">Sem movimentos.</td></tr>'}</tbody></table>`;
-  $('#txbody').querySelectorAll('select').forEach(s => s.onchange = async () => {
+    <td class="num ${t.amount<0?'':'up'}">${eur2(t.amount)}</td></tr>`).join('') || '<tr><td colspan="6" class="sub">Sem movimentos.</td></tr>'}</tbody></table>`;
+  const sel = () => [...$('#txbody').querySelectorAll('[data-sel]:checked')].map(x => +x.dataset.sel);
+  const upd = () => { const n = sel().length; $('#nsel').textContent = n + ' selecionado' + (n === 1 ? '' : 's'); $('#bgo').disabled = !n; };
+  $('#txbody').querySelectorAll('[data-sel]').forEach(x => x.onchange = upd);
+  $('#selall').onchange = e => { $('#txbody').querySelectorAll('[data-sel]').forEach(x => x.checked = e.target.checked); upd(); };
+  $('#bgo').onclick = async () => {
+    await api('/transactions/event', json('POST', {tx_ids: sel(), event_id: $('#bev').value ? +$('#bev').value : null}));
+    renderTx();
+  };
+  $('#txbody').querySelectorAll('select[data-id]').forEach(s => s.onchange = async () => {
     const rule = confirm(`Aplicar "${s.value}" também a futuros movimentos com esta descrição?\n\n${s.dataset.d}`);
     await api('/transactions/'+s.dataset.id, json('PATCH',{category:s.value, create_rule:rule}));
     renderTx();
   });
+}
+
+// ---------- simular ----------
+const SIM = {h:6, floor:+(localStorage.getItem('simFloor')||0), mode:'expected', saving:true};
+const CERT = {certain:'certo', likely:'provável', maybe:'talvez'};
+const STAT = {planned:'planeado', active:'em curso', done:'feito'};
+const dmy = d => d ? d.slice(8)+'/'+d.slice(5,7)+'/'+d.slice(2,4) : '–';
+const errText = e => { try { return JSON.parse(e.message).detail || e.message; } catch { return e.message; } };
+const putEvent = (ev, patch) => api('/events/'+ev.id, json('PUT', {name:ev.name, start_date:ev.start_date, end_date:ev.end_date, budget:ev.budget, status:ev.status, include_in_sim:ev.include_in_sim, ...patch}));
+
+function plannedForm(eid){
+  const cats = S.meta.categories.map(c=>c.name);
+  return `<div data-pf="${eid ?? ''}" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+    <input data-f="description" placeholder="${eid ? 'Item (ex.: portagens)' : 'Despesa avulsa (ex.: seguro anual)'}" style="flex:1;min-width:150px">
+    <input data-f="amount" type="number" step="0.01" min="0" placeholder="€" style="width:90px">
+    <select data-f="kind"><option value="expense">Despesa</option><option value="income">Entrada</option></select>
+    <input data-f="date" type="date">
+    <select data-f="category"><option value="">sem categoria</option>${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+    <select data-f="certainty">${Object.entries(CERT).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>
+    <button class="btn primary" data-act="padd">Adicionar</button></div>`;
+}
+function plannedTable(items){
+  return items.length ? `<table style="margin-top:8px"><tbody>${items.map(p=>`<tr>
+    <td>${dmy(p.date)}</td><td>${esc(p.description)}<div class="sub">${esc(p.category||'sem categoria')} · ${CERT[p.certainty]}</div></td>
+    <td class="num ${p.amount<0?'':'up'}">${eur2(p.amount)}</td><td class="num"><button class="btn" data-act="pdel" data-id="${p.id}">×</button></td></tr>`).join('')}</tbody></table>` : '';
+}
+function eventCard(e){
+  const over = e.budget != null && e.spent > e.budget;
+  const max = Math.max(...e.by_category.map(c=>c.amount), 1);
+  return `<div class="card" data-ev="${e.id}">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
+      <div><b>${esc(e.name)}</b> <select data-act="status" style="font-size:12px;padding:2px 6px">${Object.entries(STAT).map(([k,v])=>`<option value="${k}" ${e.status===k?'selected':''}>${v}</option>`).join('')}</select>
+        <div class="sub">${e.start_date ? dmy(e.start_date)+' → '+dmy(e.end_date) : 'sem datas'}${e.budget!=null?` · orçamento ${eur(e.budget)}`:''}</div></div>
+      <label class="sub" style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-act="incl" ${e.include_in_sim?'checked':''}> na simulação</label></div>
+    <div class="grid" style="margin-top:10px;grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      <div><div class="sub">Gasto real · ${e.tx_count} movimento${e.tx_count===1?'':'s'}</div><div class="big ${over?'down':''}" style="font-size:19px">${eur(e.spent)}</div>${e.budget?`<div class="sub">${pct(e.spent/e.budget)} do orçamento</div>`:''}</div>
+      <div><div class="sub">Itens planeados</div><div class="big" style="font-size:19px">${eur(e.planned_total)}</div></div></div>
+    ${e.by_category.length ? `<div style="margin-top:8px">${e.by_category.map(c=>`<div class="bar-row"><span class="l">${esc(c.category)}</span><span class="t"><b style="width:${Math.max(0,c.amount)/max*100}%"></b></span><span class="v">${eur(c.amount)}</span></div>`).join('')}</div>` : '<div class="sub" style="margin-top:8px">Ainda sem movimentos associados.</div>'}
+    ${plannedTable(e.planned)}${plannedForm(e.id)}
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn" data-act="sug">Sugerir movimentos (datas do evento)</button>
+      <button class="btn" data-act="evedit">Editar datas/orçamento</button>
+      <button class="btn" data-act="evdel">Remover</button></div>
+    <div data-sugbox style="margin-top:8px"></div></div>`;
+}
+
+async function loadSim(){
+  S.meta = await api('/meta');
+  const q = new URLSearchParams({horizon_months:SIM.h, floor:SIM.floor, mode:SIM.mode, include_saving:SIM.saving});
+  const [ev, r] = await Promise.all([api('/events'), api('/simulate?'+q)]);
+  S.events = ev.events; S.simEvents = Object.fromEntries(ev.events.map(e=>[e.id, e]));
+  const el = $('#sim'), y = window.scrollY;
+  const card = (h, v, s) => `<div class="card"><h3>${h}</h3><div class="big">${v}</div><div class="sub">${s}</div></div>`;
+  const ctrl = `<div class="card" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+    <label>Horizonte <select id="sh">${[3,6,12,24].map(m=>`<option value="${m}" ${SIM.h===m?'selected':''}>${m} meses</option>`).join('')}</select></label>
+    <label title="O saldo previsto fica sinalizado quando desce abaixo deste valor">Limite <input id="sf" type="number" step="50" value="${SIM.floor}" style="width:90px"> €</label>
+    <label title="Esperado: itens ponderados pela certeza (provável 70%, talvez 30%). Pessimista: todas as despesas a 100% e só as entradas certas.">Cenário <select id="sm"><option value="expected" ${SIM.mode==='expected'?'selected':''}>Esperado</option><option value="pessimistic" ${SIM.mode==='pessimistic'?'selected':''}>Pessimista</option></select></label>
+    <label title="Se ligado, o ritmo mensal de investimento/poupança das contas à ordem sai do saldo previsto."><input id="ss" type="checkbox" ${SIM.saving?'checked':''}> contar investimento mensal como saída</label></div>`;
+  let top;
+  if (r.empty) {
+    top = `<div class="card sub" style="margin-top:12px">Sem movimentos importados — a projeção precisa de histórico. Os eventos podem ser criados já.</div>`;
+  } else {
+    const b = r.baseline, below = r.below_floor_date;
+    top = `<div class="grid" style="margin-top:12px">
+      ${card('Saldo inicial', eur(r.start_balance), `contas à ordem, a ${dmy(r.start_date)} (último movimento)`)}
+      ${card('Saldo final', `<span class="${r.final_balance<r.floor?'down':''}">${eur(r.final_balance)}</span>`, `a ${dmy(r.end_date)} · itens planeados ${eur(r.planned_total)}`)}
+      ${card('Ponto mais baixo', `<span class="${r.min_balance<r.floor?'down':''}">${eur(r.min_balance)}</span>`, `a ${dmy(r.min_date)}`)}
+      ${card('Abaixo do limite', below ? `<span class="down">${dmy(below)}</span>` : '<span class="up">nunca</span>', `limite ${eur(r.floor)}`)}</div>
+      <div class="card" style="margin-top:12px"><h2>Saldo previsto</h2><div class="chartbox"><canvas id="c5"></canvas></div>
+        <div class="sub" style="margin-top:8px">Base: rendimento ~${eur(b.monthly_income)}/mês (costuma chegar ao dia ${b.income_day}), despesas ~${eur(b.monthly_expenses)}/mês${SIM.saving?`, investido ~${eur(b.monthly_invested)}/mês`:''} — médias dos últimos ${b.window_days} dias, sem os movimentos associados a eventos. As despesas são espalhadas por igual pelos dias, por isso o mínimo é aproximado.${b.thin?' <span class="warn">Histórico curto: estimativa fraca.</span>':''}${r.ignored?` ${r.ignored} item(ns) planeado(s) com data até ao último movimento ignorado(s) (já contam no saldo).`:''}</div>
+        ${r.impact.length?`<div class="sub" style="margin-top:6px">Impacto no saldo final: ${r.impact.map(i=>`${esc(i.event)} ${eur(i.amount)}`).join(' · ')}</div>`:''}</div>`;
+  }
+  el.innerHTML = ctrl + top + `
+    <h2 style="margin:22px 0 10px">Eventos</h2>
+    <div style="display:grid;gap:12px">${ev.events.map(eventCard).join('') || '<div class="card sub">Ainda sem eventos. Cria o primeiro abaixo (ex.: uma viagem) e associa-lhe movimentos de categorias diferentes.</div>'}</div>
+    <div class="card" style="margin-top:12px"><h2>Despesas e entradas avulsas (sem evento)</h2>${plannedTable(ev.loose)}${plannedForm(null)}</div>
+    <div class="card" style="margin-top:12px"><h2>Novo evento</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="en" placeholder="Nome (ex.: Viagem Algarve)"><label class="sub">início <input id="es" type="date"></label><label class="sub">fim <input id="ee" type="date"></label>
+        <input id="eb" type="number" step="1" min="0" placeholder="Orçamento €" style="width:120px"><button class="btn primary" data-act="evadd">Criar evento</button></div></div>`;
+  window.scrollTo(0, y);
+
+  if (!r.empty) {
+    const dates = r.series.dates, hasItem = new Set(r.items.map(i=>i.date));
+    chart('c5', {type:'line', data:{labels:dates, datasets:[
+      {label:'Saldo previsto', data:r.series.balance, borderColor:css('--accent'), backgroundColor:css('--accent')+'22', fill:true, pointRadius:0, tension:.15, borderWidth:2},
+      {label:'Limite', data:dates.map(()=>r.floor), borderColor:css('--neg'), borderDash:[6,4], pointRadius:0, borderWidth:1.5},
+      {label:'Itens planeados', data:dates.map((d,i)=>hasItem.has(d)?r.series.balance[i]:null), showLine:false, borderColor:css('--warn'), backgroundColor:css('--warn'), pointRadius:5}]},
+      options:{maintainAspectRatio:false, interaction:{mode:'index', intersect:false}, scales:{x:{ticks:{maxTicksLimit:8, callback(v){ return dmy(this.getLabelForValue(v)); }}}, y:{ticks:{callback:v=>eur(v)}}}}});
+  }
+  $('#sh').onchange = e => { SIM.h = +e.target.value; loadSim(); };
+  $('#sf').onchange = e => { SIM.floor = +e.target.value || 0; try { localStorage.setItem('simFloor', SIM.floor); } catch {} loadSim(); };
+  $('#sm').onchange = e => { SIM.mode = e.target.value; loadSim(); };
+  $('#ss').onchange = e => { SIM.saving = e.target.checked; loadSim(); };
+
+  el.onchange = async e => {
+    const act = e.target.dataset.act, c = e.target.closest('[data-ev]');
+    if (!c || (act !== 'status' && act !== 'incl')) return;
+    try { await putEvent(S.simEvents[c.dataset.ev], act === 'status' ? {status:e.target.value} : {include_in_sim:e.target.checked}); loadSim(); }
+    catch(err){ alert(errText(err)); }
+  };
+  el.onclick = async e => {
+    const act = e.target.dataset.act; if (!act) return;
+    const c = e.target.closest('[data-ev]'), evt = c ? S.simEvents[c.dataset.ev] : null;
+    try {
+      if (act === 'padd') {
+        const f = e.target.closest('[data-pf]'), v = k => f.querySelector(`[data-f="${k}"]`).value;
+        if (!v('description').trim() || !(+v('amount') > 0) || !v('date')) { alert('Preenche descrição, valor (maior que 0) e data.'); return; }
+        await api('/planned', json('POST', {event_id: f.dataset.pf ? +f.dataset.pf : null, description:v('description'), amount:+v('amount'), kind:v('kind'), date:v('date'), category:v('category') || null, certainty:v('certainty')}));
+        loadSim();
+      } else if (act === 'pdel') {
+        await api('/planned/'+e.target.dataset.id, {method:'DELETE'}); loadSim();
+      } else if (act === 'evadd') {
+        if (!$('#en').value.trim()) return;
+        await api('/events', json('POST', {name:$('#en').value, start_date:$('#es').value || null, end_date:$('#ee').value || null, budget:$('#eb').value === '' ? null : +$('#eb').value}));
+        loadSim();
+      } else if (act === 'evdel') {
+        if (confirm(`Remover "${evt.name}" e os seus itens planeados? Os movimentos ficam, só deixam de estar associados.`)) { await api('/events/'+evt.id, {method:'DELETE'}); loadSim(); }
+      } else if (act === 'evedit') {
+        const bud = prompt('Orçamento (€) — vazio para nenhum:', evt.budget ?? ''); if (bud === null) return;
+        const s = prompt('Início (yyyy-mm-dd) — vazio para nenhum:', evt.start_date || ''); if (s === null) return;
+        const f = prompt('Fim (yyyy-mm-dd) — vazio para nenhum:', evt.end_date || ''); if (f === null) return;
+        await putEvent(evt, {budget: bud.trim() === '' ? null : +bud.replace(',','.'), start_date: s.trim() || null, end_date: f.trim() || null}); loadSim();
+      } else if (act === 'sug') {
+        const box = c.querySelector('[data-sugbox]');
+        if (!evt.start_date || !evt.end_date) { box.innerHTML = '<div class="sub">Define primeiro as datas do evento (Editar datas/orçamento).</div>'; return; }
+        const rows = await api(`/events/${evt.id}/suggestions`);
+        box.innerHTML = rows.length ? `<div class="sub">Despesas sem evento entre ${dmy(evt.start_date)} e ${dmy(evt.end_date)}. Desmarca o que não pertence.</div>
+          <table><tbody>${rows.map(t=>`<tr><td><input type="checkbox" data-sx="${t.id}" checked></td><td>${dmy(t.date)}</td><td>${esc(t.description)}<div class="sub">${esc(t.category)} · ${esc(t.account)}</div></td><td class="num">${eur2(t.amount)}</td></tr>`).join('')}</tbody></table>
+          <button class="btn primary" data-act="sugok" style="margin-top:8px">Associar selecionados</button>`
+          : '<div class="sub">Nenhuma despesa por associar nesse intervalo.</div>';
+      } else if (act === 'sugok') {
+        const ids = [...c.querySelectorAll('[data-sx]:checked')].map(x => +x.dataset.sx);
+        if (ids.length) { await api('/transactions/event', json('POST', {tx_ids:ids, event_id:evt.id})); loadSim(); }
+      }
+    } catch(err){ alert(errText(err)); }
+  };
 }
 
 // ---------- perguntar ----------

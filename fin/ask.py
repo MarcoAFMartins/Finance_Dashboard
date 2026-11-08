@@ -9,7 +9,7 @@ SCHEMA_DOC = """\
 Base de dados SQLite. Usa preferencialmente a vista v_tx:
 
 v_tx(id, date TEXT 'yyyy-mm-dd', month TEXT 'yyyy-mm', description, amount REAL, category,
-     kind TEXT, bucket TEXT, fixed INT, account, account_type)
+     kind TEXT, bucket TEXT, fixed INT, account, account_type, event_id INT, event TEXT)
 
 Regras de negócio:
 - amount < 0 é saída de dinheiro; amount > 0 é entrada.
@@ -22,7 +22,11 @@ Regras de negócio:
   Transportes, Saúde, Educação, Restauração, Lazer, Compras, Viagens, Subscrições, Fitness, Dinheiro, Investimento,
   Transferências internas, Sem categoria.
 - Para meses usa a coluna month; para "últimos N meses" usa date >= date('now','-N months').
-Outras tabelas: accounts(id, name, type, opening_balance) — uma conta por banco, categories(name, kind, bucket, fixed), imports(...).
+- event é o nome do evento a que o movimento foi associado (ex.: uma viagem agrupa combustível, restaurantes, alojamento); NULL se não tem evento.
+  Gasto de um evento = -SUM(amount) FROM v_tx WHERE event = '<nome>' (podes agrupar por category para ver a repartição).
+Outras tabelas: accounts(id, name, type, opening_balance) — uma conta por banco, categories(name, kind, bucket, fixed), imports(...),
+events(id, name, start_date, end_date, budget, status 'planned'|'active'|'done'),
+planned_items(event_id, description, amount, date, category, certainty) — despesas futuras planeadas (amount < 0 é saída).
 Reserva e investimentos (fora dos KPIs do dia a dia): assets(id, name, institution, kind 'reserve'|'investment', tanb % ao ano bruta),
 asset_snapshots(asset_id, date, value, invested) — o valor atual de um ativo é o snapshot com a data mais recente.
 Só podes ler. Limita resultados a 100 linhas.

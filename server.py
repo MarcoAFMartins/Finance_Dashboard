@@ -7,7 +7,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from fin import ask, assets, categorize, db, ingest, kpis, llm, ocr
+from fin import ask, assets, categorize, db, events, ingest, kpis, llm, ocr
+from fin import simulate as sim
 
 app = FastAPI(title="Finance Dashboard")
 db.init()
@@ -52,12 +53,15 @@ def get_report(month: str | None = None, tax_pct: float = 0.25):
 
 
 @app.get("/api/transactions")
-def transactions(month: str | None = None, category: str | None = None, account: str | None = None, q: str | None = None, limit: int = 500):
+def transactions(month: str | None = None, category: str | None = None, account: str | None = None, q: str | None = None, event_id: int | None = None, limit: int = 500):
     sql, args = (
-        "SELECT t.id, t.date, t.description, t.amount, t.category, t.cat_source, a.name AS account "
-        "FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE 1=1",
+        "SELECT t.id, t.date, t.description, t.amount, t.category, t.cat_source, a.name AS account, t.event_id, e.name AS event "
+        "FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN events e ON e.id=t.event_id WHERE 1=1",
         [],
     )
+    if event_id:
+        sql += " AND t.event_id=?"
+        args.append(event_id)
     if month:
         sql += " AND substr(t.date,1,7)=?"
         args.append(month)
@@ -215,6 +219,167 @@ def delete_snapshot(sid: int):
     with db.connect() as c:
         c.execute("DELETE FROM asset_snapshots WHERE id=?", (sid,))
     return {"ok": True}
+
+
+class EventIn(BaseModel):
+    name: str
+    start_date: str | None = None
+    end_date: str | None = None
+    budget: float | None = None
+    status: str = "planned"
+    include_in_sim: bool = True
+
+
+def _event_args(e: EventIn):
+    name = e.name.strip()
+    if not name:
+        raise HTTPException(422, "O evento precisa de nome")
+    if e.status not in events.STATUSES:
+        raise HTTPException(422, "status deve ser planned, active ou done")
+    try:
+        start, end = events.check_iso(e.start_date), events.check_iso(e.end_date)
+    except ValueError:
+        raise HTTPException(422, "Datas devem ser yyyy-mm-dd")
+    if start and end and end < start:
+        raise HTTPException(422, "A data de fim é anterior à de início")
+    return name, start, end, e.budget, e.status, int(e.include_in_sim)
+
+
+@app.get("/api/events")
+def get_events():
+    with db.connect() as c:
+        return events.list_events(c)
+
+
+@app.post("/api/events")
+def add_event(e: EventIn):
+    args = _event_args(e)
+    with db.connect() as c:
+        try:
+            cur = c.execute(
+                "INSERT INTO events(name, start_date, end_date, budget, status, include_in_sim) VALUES (?,?,?,?,?,?)", args
+            )
+        except Exception:
+            raise HTTPException(409, "Já existe um evento com esse nome")
+        return {"id": cur.lastrowid}
+
+
+@app.put("/api/events/{eid}")
+def update_event(eid: int, e: EventIn):
+    args = _event_args(e)
+    with db.connect() as c:
+        try:
+            cur = c.execute(
+                "UPDATE events SET name=?, start_date=?, end_date=?, budget=?, status=?, include_in_sim=? WHERE id=?", (*args, eid)
+            )
+        except Exception:
+            raise HTTPException(409, "Já existe um evento com esse nome")
+        if not cur.rowcount:
+            raise HTTPException(404)
+    return {"ok": True}
+
+
+@app.delete("/api/events/{eid}")
+def delete_event(eid: int):
+    # os movimentos ficam (event_id passa a NULL); os itens planeados do evento apagam-se em cascata
+    with db.connect() as c:
+        c.execute("DELETE FROM events WHERE id=?", (eid,))
+    return {"ok": True}
+
+
+@app.get("/api/events/{eid}/suggestions")
+def event_suggestions(eid: int):
+    with db.connect() as c:
+        return events.suggestions(c, eid)
+
+
+class AssignIn(BaseModel):
+    tx_ids: list[int]
+    event_id: int | None = None  # None = tirar do evento
+
+
+@app.post("/api/transactions/event")
+def assign_event(a: AssignIn):
+    with db.connect() as c:
+        try:
+            return {"updated": events.assign(c, a.tx_ids, a.event_id)}
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+
+
+class PlannedIn(BaseModel):
+    event_id: int | None = None
+    description: str
+    amount: float          # sempre positivo; o sentido vem de kind
+    kind: str = "expense"  # expense | income
+    date: str
+    category: str | None = None
+    certainty: str = "certain"
+
+
+def _planned_args(p: PlannedIn):
+    if not p.description.strip():
+        raise HTTPException(422, "Descrição vazia")
+    if p.amount <= 0:
+        raise HTTPException(422, "O valor deve ser positivo (usa 'kind' para entrada/despesa)")
+    if p.kind not in ("expense", "income"):
+        raise HTTPException(422, "kind deve ser expense ou income")
+    if p.certainty not in events.CERTAINTIES:
+        raise HTTPException(422, "certainty deve ser certain, likely ou maybe")
+    try:
+        d = events.check_iso(p.date)
+    except ValueError:
+        d = None
+    if not d:
+        raise HTTPException(422, "Data deve ser yyyy-mm-dd")
+    signed = -p.amount if p.kind == "expense" else p.amount
+    return (p.event_id, p.description.strip(), signed, d, p.category or None, p.certainty)
+
+
+@app.post("/api/planned")
+def add_planned(p: PlannedIn):
+    args = _planned_args(p)
+    with db.connect() as c:
+        try:
+            cur = c.execute(
+                "INSERT INTO planned_items(event_id, description, amount, date, category, certainty) VALUES (?,?,?,?,?,?)", args
+            )
+        except Exception:
+            raise HTTPException(422, "Evento ou categoria inexistente")
+        return {"id": cur.lastrowid}
+
+
+@app.put("/api/planned/{pid}")
+def update_planned(pid: int, p: PlannedIn):
+    args = _planned_args(p)
+    with db.connect() as c:
+        try:
+            cur = c.execute(
+                "UPDATE planned_items SET event_id=?, description=?, amount=?, date=?, category=?, certainty=? WHERE id=?", (*args, pid)
+            )
+        except Exception:
+            raise HTTPException(422, "Evento ou categoria inexistente")
+        if not cur.rowcount:
+            raise HTTPException(404)
+    return {"ok": True}
+
+
+@app.delete("/api/planned/{pid}")
+def delete_planned(pid: int):
+    with db.connect() as c:
+        c.execute("DELETE FROM planned_items WHERE id=?", (pid,))
+    return {"ok": True}
+
+
+@app.get("/api/simulate")
+def simulate(horizon_months: int = 6, floor: float = 0.0, mode: str = "expected", include_saving: bool = True):
+    if mode not in sim.MODES:
+        raise HTTPException(422, "mode deve ser expected ou pessimistic")
+    with db.connect() as c:
+        return sim.run(
+            db.load_transactions(c), db.load_table(c, "categories"), db.load_table(c, "accounts"),
+            events.planned_for_sim(c), max(1, min(horizon_months, 24)), floor, mode, include_saving,
+        )
 
 
 class Question(BaseModel):
