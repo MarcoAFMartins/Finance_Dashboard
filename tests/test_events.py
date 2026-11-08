@@ -56,6 +56,52 @@ def load(c):
     return db.load_transactions(c), db.load_table(c, "categories"), db.load_table(c, "accounts")
 
 
+def test_recurring_on_its_day():
+    """Renda fixa ao dia 1 sai inteira nesse dia; o resto continua espalhado; o total do mês não muda."""
+    import pandas as pd
+
+    rows = []
+    for m in ("2026-01", "2026-02", "2026-03", "2026-04"):
+        rows.append((f"{m}-01", "RENDA SENHORIO", -500.0, "Habitação"))
+        rows.append((f"{m}-25", "SALARIO", 1500.0, "Rendimento"))
+        for dd in range(2, 29, 3):
+            rows.append((f"{m}-{dd:02d}", f"CONTINENTE {dd}{m}", -12.0 - dd, "Supermercado"))
+    tx = pd.DataFrame(rows, columns=["date", "description", "amount", "category"])
+    tx["date"] = pd.to_datetime(tx["date"])
+    tx["id"], tx["cat_source"], tx["event_id"], tx["account"], tx["account_type"] = range(len(tx)), "rule", None, "C", "liquid"
+    cats = pd.DataFrame(db.SEED_CATEGORIES, columns=["name", "kind", "bucket", "fixed"])
+    acc = pd.DataFrame([{"name": "C", "type": "liquid", "opening_balance": 1000.0}])
+    r = sim.run(tx, cats, acc, [], horizon_months=1, today=pd.Timestamp("2026-04-28"))
+    b = r["baseline"]
+    assert [(x["name"], x["day"], round(x["amount"])) for x in b["recurring"]] == [("RENDA SENHORIO", 1, 500)], b["recurring"]
+    series = dict(zip(r["series"]["dates"], r["series"]["balance"]))  # mês a mês: fim de abril, fim de maio, fim de junho
+    full = sim.run(tx, cats, acc, [], horizon_months=0, today=pd.Timestamp("2026-04-28"))
+    daily = dict(zip(full["series"]["dates"], full["series"]["balance"]))
+    assert abs(daily["2026-04-30"] - daily["2026-04-29"] + b["daily_outflow"]) < 0.01, "29→30 abril: só a parte variável"
+    may = sim.run(tx, cats, acc, [], horizon_months=0, today=pd.Timestamp("2026-05-15"))
+    d2 = dict(zip(may["series"]["dates"], may["series"]["balance"]))
+    assert abs((d2["2026-05-01"] - d2["2026-04-30"]) - (-500 - b["daily_outflow"])) < 0.01, "a renda sai inteira ao dia 1"
+    month_out = 500 + b["daily_outflow"] * 31
+    assert abs(month_out - b["monthly_expenses"] * 31 / 30.4375) < 1.0 + 0.02 * month_out, (month_out, b["monthly_expenses"])
+    assert series  # série mensal existe
+    print("recorrentes no seu dia OK")
+
+
+def test_backup():
+    from fin import backup
+
+    n_tx = None
+    with db.connect() as c:
+        n_tx = c.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+    paths = [backup.snapshot("teste") for _ in range(backup.KEEP + 3)]
+    lst = backup.list_backups()
+    assert len(lst) == backup.KEEP, "só ficam as mais recentes"
+    assert lst[0]["name"] == paths[-1].name and not paths[0].exists()
+    with sqlite3.connect(paths[-1]) as b:
+        assert b.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == n_tx, "a cópia tem os mesmos dados"
+    print("backups OK")
+
+
 def run_sim(c, **kw):
     tx, cats, acc = load(c)
     return sim.run(tx, cats, acc, events.planned_for_sim(c), **kw)
@@ -208,6 +254,8 @@ def main():
         assert c.execute("SELECT COUNT(*) n FROM transactions").fetchone()["n"] == n_tx
         assert c.execute("SELECT COUNT(*) n FROM transactions WHERE event_id IS NOT NULL").fetchone()["n"] == 0
     print("eventos + simulação OK")
+    test_recurring_on_its_day()
+    test_backup()
     test_api()
     print("TUDO OK")
 

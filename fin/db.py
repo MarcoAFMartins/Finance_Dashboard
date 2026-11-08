@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS categories(
     kind TEXT NOT NULL,                           -- income | expense | saving | transfer
     bucket TEXT NOT NULL DEFAULT 'other',         -- needs | wants | other
     fixed INTEGER NOT NULL DEFAULT 0,
-    custom INTEGER NOT NULL DEFAULT 0             -- 1 = criada pelo utilizador (pode ser apagada)
+    custom INTEGER NOT NULL DEFAULT 0,            -- 1 = criada pelo utilizador (pode ser apagada)
+    budget REAL                                   -- orçamento mensal (€), opcional
 );
 CREATE TABLE IF NOT EXISTS rules(
     id INTEGER PRIMARY KEY,
@@ -190,8 +191,11 @@ def init():
         if "event_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(transactions)")}:
             conn.execute("ALTER TABLE transactions ADD COLUMN event_id INTEGER REFERENCES events(id) ON DELETE SET NULL")
         # migração: categorias próprias
-        if "custom" not in {r["name"] for r in conn.execute("PRAGMA table_info(categories)")}:
+        cat_cols = {r["name"] for r in conn.execute("PRAGMA table_info(categories)")}
+        if "custom" not in cat_cols:
             conn.execute("ALTER TABLE categories ADD COLUMN custom INTEGER NOT NULL DEFAULT 0")
+        if "budget" not in cat_cols:
+            conn.execute("ALTER TABLE categories ADD COLUMN budget REAL")
         conn.executescript(SCHEMA_POST)
         conn.executemany(
             "INSERT OR IGNORE INTO categories(name, kind, bucket, fixed) VALUES (?,?,?,?)",

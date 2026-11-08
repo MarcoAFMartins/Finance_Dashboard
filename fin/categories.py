@@ -24,11 +24,16 @@ def create(conn, name: str, kind: str = "expense", bucket: str = "other", fixed:
     return name
 
 
-def update(conn, name: str, kind: str, bucket: str, fixed: bool):
+def update(conn, name: str, kind: str, bucket: str, fixed: bool, budget: float | None = None):
     _check(kind, bucket)
     if name == FALLBACK:
         raise ValueError(f"'{FALLBACK}' não se edita")
-    cur = conn.execute("UPDATE categories SET kind=?, bucket=?, fixed=? WHERE name=?", (kind, bucket, int(fixed), name))
+    if budget is not None and budget < 0:
+        raise ValueError("O orçamento não pode ser negativo")
+    budget = budget or None  # 0 = sem orçamento
+    cur = conn.execute(
+        "UPDATE categories SET kind=?, bucket=?, fixed=?, budget=? WHERE name=?", (kind, bucket, int(fixed), budget, name)
+    )
     if not cur.rowcount:
         raise LookupError("Categoria inexistente")
 

@@ -6,3 +6,7 @@ __pycache__/
 # Nada em data/ vai para o repo (BD, extratos reais, inbox...), excepto os exemplos sintéticos.
 data/*
 !data/samples/
+# backups automáticos da BD (já cobertos por data/*, explícito por segurança) e qualquer .db fora dos exemplos
+data/backups/
+*.db
+!data/samples/*.db
