@@ -42,6 +42,26 @@ CREATE TABLE IF NOT EXISTS imports(
     imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(file_hash, account)
 );
+-- Eventos: agrupam despesas de categorias diferentes (ex.: viagem = combustível + restaurantes + alojamento)
+CREATE TABLE IF NOT EXISTS events(
+    id INTEGER PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    start_date TEXT,                              -- ISO, opcional
+    end_date TEXT,
+    budget REAL,
+    status TEXT NOT NULL DEFAULT 'planned',       -- planned | active | done
+    include_in_sim INTEGER NOT NULL DEFAULT 1     -- 0 = fora da simulação (cenários)
+);
+-- Despesas/entradas futuras, dentro de um evento ou avulsas (event_id NULL)
+CREATE TABLE IF NOT EXISTS planned_items(
+    id INTEGER PRIMARY KEY,
+    event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+    description TEXT NOT NULL,
+    amount REAL NOT NULL,                         -- mesmo sinal das transações: negativo = saída
+    date TEXT NOT NULL,
+    category TEXT REFERENCES categories(name),
+    certainty TEXT NOT NULL DEFAULT 'certain'     -- certain | likely | maybe
+);
 CREATE TABLE IF NOT EXISTS transactions(
     id INTEGER PRIMARY KEY,
     uid TEXT UNIQUE NOT NULL,                     -- hash estável, evita duplicados em re-importações
@@ -51,7 +71,8 @@ CREATE TABLE IF NOT EXISTS transactions(
     account_id INTEGER NOT NULL REFERENCES accounts(id),
     category TEXT NOT NULL DEFAULT 'Sem categoria',
     cat_source TEXT NOT NULL DEFAULT 'none',      -- none | rule | llm | manual
-    import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE
+    import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE,
+    event_id INTEGER REFERENCES events(id) ON DELETE SET NULL
 );
 -- Reserva e investimentos: separados das contas e dos KPIs do dia a dia
 CREATE TABLE IF NOT EXISTS assets(
@@ -70,18 +91,27 @@ CREATE TABLE IF NOT EXISTS asset_snapshots(
     invested REAL,                                -- capital aplicado (opcional, para investimentos)
     UNIQUE(asset_id, date)
 );
+CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
+CREATE INDEX IF NOT EXISTS idx_tx_cat ON transactions(category);
+"""
 
+# Corre depois da migração (precisa de transactions.event_id). A vista é recriada sempre,
+# para bases antigas passarem a ter as colunas novas.
+SCHEMA_POST = """
+CREATE INDEX IF NOT EXISTS idx_tx_event ON transactions(event_id);
+CREATE INDEX IF NOT EXISTS idx_planned_date ON planned_items(date);
+DROP VIEW IF EXISTS v_tx;
 -- vista usada pelo "Perguntar": mesma lógica de kind dos KPIs, sem JOINs para o LLM errar
-CREATE VIEW IF NOT EXISTS v_tx AS
+CREATE VIEW v_tx AS
 SELECT t.id, t.date, substr(t.date,1,7) AS month, t.description, t.amount, t.category,
        CASE WHEN t.category='Sem categoria' THEN (CASE WHEN t.amount>0 THEN 'income' ELSE 'expense' END)
             ELSE COALESCE(c.kind,'expense') END AS kind,
-       c.bucket, c.fixed, a.name AS account, a.type AS account_type
+       c.bucket, c.fixed, a.name AS account, a.type AS account_type,
+       t.event_id, e.name AS event
 FROM transactions t
 JOIN accounts a ON a.id = t.account_id
-LEFT JOIN categories c ON c.name = t.category;
-CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
-CREATE INDEX IF NOT EXISTS idx_tx_cat ON transactions(category);
+LEFT JOIN categories c ON c.name = t.category
+LEFT JOIN events e ON e.id = t.event_id;
 """
 
 # (name, kind, bucket, fixed)
@@ -148,6 +178,10 @@ def init():
 
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # migração: bases criadas antes dos eventos não têm transactions.event_id
+        if "event_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(transactions)")}:
+            conn.execute("ALTER TABLE transactions ADD COLUMN event_id INTEGER REFERENCES events(id) ON DELETE SET NULL")
+        conn.executescript(SCHEMA_POST)
         conn.executemany(
             "INSERT OR IGNORE INTO categories(name, kind, bucket, fixed) VALUES (?,?,?,?)",
             SEED_CATEGORIES,
@@ -169,7 +203,7 @@ def get_or_create_account(conn, name: str, type_: str = "liquid") -> int:
 
 def load_transactions(conn) -> pd.DataFrame:
     df = pd.read_sql_query(
-        """SELECT t.id, t.date, t.description, t.amount, t.category, t.cat_source,
+        """SELECT t.id, t.date, t.description, t.amount, t.category, t.cat_source, t.event_id,
                   a.name AS account, a.type AS account_type
            FROM transactions t JOIN accounts a ON a.id = t.account_id
            ORDER BY t.date DESC, t.id DESC""",
