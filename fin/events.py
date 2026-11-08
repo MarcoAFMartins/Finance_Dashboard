@@ -19,8 +19,11 @@ def _planned(conn, event_id):
     return [dict(r) for r in rows]
 
 
-def list_events(conn) -> dict:
-    """Eventos com gasto real (por categoria), itens planeados e totais; mais os itens avulsos."""
+def list_events(conn, month: str | None = None) -> dict:
+    """Eventos com gasto real (por categoria), itens planeados e totais; mais os itens avulsos.
+
+    Com month (yyyy-mm), cada evento traz também spent_month: o gasto desse mês.
+    """
     events = [
         dict(r)
         for r in conn.execute("SELECT * FROM events ORDER BY COALESCE(start_date, '9999-12-31'), name")
@@ -37,6 +40,10 @@ def list_events(conn) -> dict:
         e["planned"] = _planned(conn, e["id"])
         e["planned_total"] = -sum(p["amount"] for p in e["planned"])
         e["include_in_sim"] = bool(e["include_in_sim"])
+        if month:
+            e["spent_month"] = conn.execute(
+                "SELECT COALESCE(-SUM(amount), 0) FROM v_tx WHERE event_id = ? AND month = ?", (e["id"], month)
+            ).fetchone()[0]
     return {"events": events, "loose": _planned(conn, None)}
 
 

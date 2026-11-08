@@ -7,7 +7,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from fin import ask, assets, categorize, db, events, ingest, kpis, llm, ocr
+from fin import ask, assets, categories, categorize, db, events, ingest, kpis, llm, ocr
 from fin import simulate as sim
 
 app = FastAPI(title="Finance Dashboard")
@@ -132,6 +132,47 @@ def delete_rule(rid: int):
     return {"ok": True}
 
 
+class CategoryIn(BaseModel):
+    name: str
+    kind: str = "expense"
+    bucket: str = "other"
+    fixed: bool = False
+
+
+@app.post("/api/categories")
+def add_category(cat: CategoryIn):
+    with db.connect() as c:
+        try:
+            return {"name": categories.create(c, cat.name, cat.kind, cat.bucket, cat.fixed)}
+        except FileExistsError as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+
+@app.put("/api/categories/{name}")
+def update_category_def(name: str, cat: CategoryIn):
+    with db.connect() as c:
+        try:
+            categories.update(c, name, cat.kind, cat.bucket, cat.fixed)
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/categories/{name}")
+def delete_category(name: str):
+    with db.connect() as c:
+        try:
+            return {"moved": categories.delete(c, name)}
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except PermissionError as e:
+            raise HTTPException(403, str(e))
+
+
 class AccountUpdate(BaseModel):
     opening_balance: float
     type: str
@@ -246,9 +287,9 @@ def _event_args(e: EventIn):
 
 
 @app.get("/api/events")
-def get_events():
+def get_events(month: str | None = None):
     with db.connect() as c:
-        return events.list_events(c)
+        return events.list_events(c, month)
 
 
 @app.post("/api/events")
@@ -372,14 +413,51 @@ def delete_planned(pid: int):
 
 
 @app.get("/api/simulate")
-def simulate(horizon_months: int = 6, floor: float = 0.0, mode: str = "expected", include_saving: bool = True):
+def simulate(horizon_months: int = 0, floor: float = 0.0, mode: str = "expected", include_saving: bool = True):
     if mode not in sim.MODES:
         raise HTTPException(422, "mode deve ser expected ou pessimistic")
     with db.connect() as c:
         return sim.run(
             db.load_transactions(c), db.load_table(c, "categories"), db.load_table(c, "accounts"),
-            events.planned_for_sim(c), max(1, min(horizon_months, 24)), floor, mode, include_saving,
+            events.planned_for_sim(c), max(0, min(horizon_months, 12)), floor, mode, include_saving,
+            goals=[dict(r) for r in c.execute("SELECT * FROM goals ORDER BY date, id")],
         )
+
+
+class GoalIn(BaseModel):
+    name: str
+    target: float
+    date: str
+
+
+@app.get("/api/goals")
+def get_goals():
+    with db.connect() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM goals ORDER BY date, id")]
+
+
+@app.post("/api/goals")
+def add_goal(g: GoalIn):
+    if not g.name.strip():
+        raise HTTPException(422, "O objetivo precisa de nome")
+    if g.target <= 0:
+        raise HTTPException(422, "O valor a poupar deve ser positivo")
+    try:
+        d = events.check_iso(g.date)
+    except ValueError:
+        d = None
+    if not d:
+        raise HTTPException(422, "Data deve ser yyyy-mm-dd")
+    with db.connect() as c:
+        cur = c.execute("INSERT INTO goals(name, target, date) VALUES (?,?,?)", (g.name.strip(), g.target, d))
+        return {"id": cur.lastrowid}
+
+
+@app.delete("/api/goals/{gid}")
+def delete_goal(gid: int):
+    with db.connect() as c:
+        c.execute("DELETE FROM goals WHERE id=?", (gid,))
+    return {"ok": True}
 
 
 class Question(BaseModel):
