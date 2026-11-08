@@ -148,6 +148,58 @@ def main():
         low = run_sim(c, horizon_months=3, floor=exp["min_balance"] - 1000)
         assert low["below_floor_date"] is None
 
+        # --- objetivos: poupado = crescimento do saldo (+ investido); data além do horizonte também conta ---
+        far = _dt.date.fromisoformat(start) + _dt.timedelta(days=200)
+        m0 = run_sim(c, horizon_months=0, today=last)  # de novo: agora já há itens planeados
+        gl = run_sim(c, horizon_months=0, today=last, goals=[
+            {"id": 1, "name": "Fim do mês", "target": 0.01, "date": m0["end_date"]},
+            {"id": 2, "name": "Impossível", "target": 10_000_000, "date": far.isoformat()},
+            {"id": 3, "name": "Passado", "target": 100, "date": d(-5)},
+            {"id": 4, "name": "Longe", "target": 100, "date": "2099-01-01"},
+        ])
+        st = {g["name"]: g for g in gl["goals"]}
+        assert gl["end_date"] == m0["end_date"], "objetivos não mudam o horizonte mostrado"
+        assert len(gl["series"]["dates"]) == len(m0["series"]["dates"])
+        g1, days = st["Fim do mês"], (_dt.date.fromisoformat(m0["end_date"]) - last).days
+        invested = gl["baseline"]["monthly_invested"] / 30.4375 * days
+        assert abs(g1["projected"] - (m0["final_balance"] - m0["start_balance"] + invested)) < 0.01, "poupado = crescimento do saldo + investido"
+        assert (g1["status"] == "ok") == (g1["projected"] >= 0.01)
+        nosave = run_sim(c, horizon_months=0, today=last, include_saving=False, goals=[{"name": "x", "target": 1, "date": m0["end_date"]}])
+        assert abs(nosave["goals"][0]["projected"] - (nosave["final_balance"] - nosave["start_balance"])) < 0.01
+        assert st["Impossível"]["status"] == "short" and st["Impossível"]["gap"] > 0
+        assert st["Passado"]["status"] == "past" and st["Longe"]["status"] == "too_far"
+        assert abs(st["Impossível"]["needed_per_month"] * st["Impossível"]["months"] - 10_000_000) < 10_000  # valores saem arredondados
+
+        # --- eventos: gasto do mês ---
+        month = c.execute("SELECT substr(date,1,7) m FROM transactions WHERE event_id=? LIMIT 1", (eid,)).fetchone()["m"]
+        em = next(e for e in events.list_events(c, month)["events"] if e["id"] == eid)
+        assert 0 < em["spent_month"] <= em["spent"] + 0.01
+        assert "spent_month" not in events.list_events(c)["events"][0]
+
+        # --- categorias próprias ---
+        from fin import categories
+        categories.create(c, "Animais", "expense", "wants", False)
+        for bad in [("animais", "expense", "wants"), ("", "expense", "wants"), ("X", "xpto", "wants"), ("Y", "expense", "xpto")]:
+            try:
+                categories.create(c, *bad)
+                raise AssertionError(f"devia falhar: {bad}")
+            except (ValueError, FileExistsError):
+                pass
+        tid = c.execute("SELECT id FROM transactions LIMIT 1").fetchone()["id"]
+        c.execute("UPDATE transactions SET category='Animais', cat_source='manual' WHERE id=?", (tid,))
+        c.execute("INSERT INTO rules(pattern, category) VALUES ('petshop', 'Animais')")
+        categories.update(c, "Animais", "expense", "needs", True)
+        assert dict(c.execute("SELECT bucket, fixed, custom FROM categories WHERE name='Animais'").fetchone()) == {"bucket": "needs", "fixed": 1, "custom": 1}
+        try:
+            categories.delete(c, "Supermercado")
+            raise AssertionError("categorias de origem não se apagam")
+        except PermissionError:
+            pass
+        assert categories.delete(c, "Animais") == 1
+        assert c.execute("SELECT category, cat_source FROM transactions WHERE id=?", (tid,)).fetchone()["category"] == "Sem categoria"
+        assert not c.execute("SELECT 1 FROM rules WHERE category='Animais'").fetchone()
+        assert not c.execute("SELECT 1 FROM categories WHERE name='Animais'").fetchone()
+
         # --- apagar evento: movimentos ficam, itens planeados vão com ele ---
         n_tx = c.execute("SELECT COUNT(*) n FROM transactions").fetchone()["n"]
         c.execute("DELETE FROM events WHERE id=?", (aid,))
@@ -204,6 +256,18 @@ def test_api():
     from fin import ask
     cols, rows = ask.run_readonly("SELECT event, COUNT(*) FROM v_tx WHERE event IS NOT NULL GROUP BY event")
     assert rows == [["Concerto", 3]], rows
+
+    # categorias e objetivos pela API
+    assert cl.post("/api/categories", json={"name": "Animais", "kind": "expense", "bucket": "wants"}).status_code == 200
+    assert cl.post("/api/categories", json={"name": "Animais"}).status_code == 409
+    assert cl.post("/api/categories", json={"name": "Z", "kind": "xpto"}).status_code == 422
+    assert cl.put("/api/categories/Animais", json={"name": "Animais", "kind": "expense", "bucket": "needs", "fixed": True}).status_code == 200
+    assert cl.delete("/api/categories/Supermercado").status_code == 403
+    assert cl.delete("/api/categories/Animais").json() == {"moved": 0}
+    assert cl.post("/api/goals", json={"name": "Carro", "target": -1, "date": "2027-01-01"}).status_code == 422
+    gid = cl.post("/api/goals", json={"name": "Carro", "target": 500, "date": "2099-01-01"}).json()["id"]
+    assert cl.get("/api/simulate").json()["goals"][0]["status"] == "too_far"
+    assert cl.delete(f"/api/goals/{gid}").status_code == 200 and cl.get("/api/goals").json() == []
 
     assert cl.delete(f"/api/events/{eid}").status_code == 200
     assert cl.get("/api/events").json() == {"events": [], "loose": []}

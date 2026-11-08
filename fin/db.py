@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS categories(
     name TEXT PRIMARY KEY,
     kind TEXT NOT NULL,                           -- income | expense | saving | transfer
     bucket TEXT NOT NULL DEFAULT 'other',         -- needs | wants | other
-    fixed INTEGER NOT NULL DEFAULT 0
+    fixed INTEGER NOT NULL DEFAULT 0,
+    custom INTEGER NOT NULL DEFAULT 0             -- 1 = criada pelo utilizador (pode ser apagada)
 );
 CREATE TABLE IF NOT EXISTS rules(
     id INTEGER PRIMARY KEY,
@@ -61,6 +62,13 @@ CREATE TABLE IF NOT EXISTS planned_items(
     date TEXT NOT NULL,
     category TEXT REFERENCES categories(name),
     certainty TEXT NOT NULL DEFAULT 'certain'     -- certain | likely | maybe
+);
+-- Objetivos do Simular: "poupar target € até date"
+CREATE TABLE IF NOT EXISTS goals(
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    target REAL NOT NULL,
+    date TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS transactions(
     id INTEGER PRIMARY KEY,
@@ -181,6 +189,9 @@ def init():
         # migração: bases criadas antes dos eventos não têm transactions.event_id
         if "event_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(transactions)")}:
             conn.execute("ALTER TABLE transactions ADD COLUMN event_id INTEGER REFERENCES events(id) ON DELETE SET NULL")
+        # migração: categorias próprias
+        if "custom" not in {r["name"] for r in conn.execute("PRAGMA table_info(categories)")}:
+            conn.execute("ALTER TABLE categories ADD COLUMN custom INTEGER NOT NULL DEFAULT 0")
         conn.executescript(SCHEMA_POST)
         conn.executemany(
             "INSERT OR IGNORE INTO categories(name, kind, bucket, fixed) VALUES (?,?,?,?)",
