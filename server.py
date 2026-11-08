@@ -7,7 +7,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from fin import ask, assets, categories, categorize, db, events, ingest, kpis, llm, ocr
+from fin import ask, assets, backup, categories, categorize, db, events, ingest, kpis, llm, ocr
 from fin import simulate as sim
 
 app = FastAPI(title="Finance Dashboard")
@@ -33,6 +33,7 @@ def meta():
 
 @app.post("/api/import")
 async def import_files(files: list[UploadFile] = File(...), account: str = Form("Conta principal"), account_type: str = Form("liquid")):
+    backup.snapshot("antes-importar")
     results = []
     with tempfile.TemporaryDirectory() as tmp, db.connect() as c:
         for f in files:
@@ -137,6 +138,7 @@ class CategoryIn(BaseModel):
     kind: str = "expense"
     bucket: str = "other"
     fixed: bool = False
+    budget: float | None = None  # orçamento mensal; só usado ao editar
 
 
 @app.post("/api/categories")
@@ -154,7 +156,7 @@ def add_category(cat: CategoryIn):
 def update_category_def(name: str, cat: CategoryIn):
     with db.connect() as c:
         try:
-            categories.update(c, name, cat.kind, cat.bucket, cat.fixed)
+            categories.update(c, name, cat.kind, cat.bucket, cat.fixed, cat.budget)
         except LookupError as e:
             raise HTTPException(404, str(e))
         except ValueError as e:
@@ -164,6 +166,7 @@ def update_category_def(name: str, cat: CategoryIn):
 
 @app.delete("/api/categories/{name}")
 def delete_category(name: str):
+    backup.snapshot("antes-apagar-categoria")
     with db.connect() as c:
         try:
             return {"moved": categories.delete(c, name)}
@@ -469,6 +472,27 @@ def ask_data(q: Question):
     return ask.answer(q.question.strip())
 
 
+@app.get("/api/backups")
+def get_backups():
+    return [{k: v for k, v in b.items() if k != "path"} for b in backup.list_backups()]
+
+
+@app.post("/api/backups")
+def make_backup():
+    p = backup.snapshot("manual")
+    if not p:
+        raise HTTPException(404, "Ainda não há base de dados")
+    return {"name": p.name}
+
+
+@app.get("/api/backups/{name}")
+def download_backup(name: str):
+    p = next((Path(b["path"]) for b in backup.list_backups() if b["name"] == name), None)  # só nomes da lista: sem path traversal
+    if not p:
+        raise HTTPException(404)
+    return FileResponse(p, filename=name, media_type="application/octet-stream")
+
+
 @app.get("/api/imports")
 def imports():
     with db.connect() as c:
@@ -491,6 +515,7 @@ def rename_import(iid: int, body: ImportRename):
 
 @app.delete("/api/imports/{iid}")
 def delete_import(iid: int):
+    backup.snapshot("antes-remover-importacao")
     with db.connect() as c:
         c.execute("DELETE FROM transactions WHERE import_id=?", (iid,))
         c.execute("DELETE FROM imports WHERE id=?", (iid,))

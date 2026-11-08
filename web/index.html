@@ -51,7 +51,23 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .empty{padding:60px 0;text-align:center;color:var(--mute)}
 .hidden{display:none}
 .res{font-size:13.5px;margin:6px 0}.res.err{color:var(--neg)}
-@media(max-width:640px){main{padding:12px}.row2{grid-template-columns:1fr}.bar-row .l{width:100px}}
+nav{overflow-x:auto;max-width:100%;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+nav::-webkit-scrollbar{display:none}
+nav button{flex:none;white-space:nowrap}
+.tbl{overflow-x:auto}
+@media(max-width:640px){
+  main{padding:12px}.row2{grid-template-columns:1fr}.bar-row .l{width:100px}
+  header{padding:10px 12px;gap:8px}
+  header h1{display:none}
+  nav{order:3;width:100%;margin:0 -4px}
+  .tools{margin-left:0;width:100%;justify-content:space-between}
+  .card{padding:12px}
+  .big{font-size:21px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  table{font-size:13px}
+  td,th{padding:6px 5px}
+  .card:has(> table),.card:has(> .tbl){overflow-x:auto}
+}
 </style>
 </head>
 <body>
@@ -151,6 +167,15 @@ async function loadOverview(){
         <td class="num ${over?'down':''}">${eur(e.spent)}<div class="sub">${e.tx_count} mov.</div></td>
         <td class="num">${eur(e.spent_month)}</td></tr>`; }).join('')}</tbody></table>
       <div class="sub" style="margin-top:6px">Gasto líquido associado a cada evento (reembolsos abatem). Gere-os no separador <b>Eventos</b>.</div></div>` : '';
+  const budCard = r.budgets.length ? `<div class="card" style="margin-top:12px"><h2>Orçamentos — ${mlabel(r.month)}</h2>
+    ${r.budgets.map(b=>{
+      const over = b.spent > b.budget, col = over ? 'neg' : b.over_pace ? 'warn' : 'pos';
+      return `<div class="bar-row"><span class="l">${esc(b.category)}</span>
+        <span class="t" style="position:relative"><b style="width:${Math.min(100,Math.max(0,b.pct*100))}%;background:var(--${col})"></b>${r.month_elapsed<1?`<i title="hoje" style="position:absolute;top:-3px;bottom:-3px;left:${r.month_elapsed*100}%;width:2px;background:var(--ink);opacity:.5"></i>`:''}</span>
+        <span class="v" style="width:150px">${eur(b.spent)} / ${eur(b.budget)}</span></div>
+        ${over?`<div class="sub down" style="margin:-2px 0 6px 160px">passaste ${eur(-b.left)}</div>`:''}`; }).join('')}
+    <div class="sub" style="margin-top:6px">${r.month_elapsed<1?'A risca marca quanto do mês já passou: barra amarela = estás a gastar mais depressa do que o orçamento permite. ':''}Define orçamentos em <b>Configuração → Categorias</b>.</div></div>` : '';
+  const overBud = r.budgets.filter(b => b.spent > b.budget);
   const runway = k.runway_months == null ? '–' : k.runway_months.toFixed(1)+' meses';
   const cards = [
     ['Rendimento', eur(k.income), delta(k.d_income, true)],
@@ -167,6 +192,8 @@ async function loadOverview(){
   el.innerHTML = `
     ${k.uncategorized ? `<div class="card warn" style="margin-bottom:12px">${k.uncategorized} movimento(s) sem categoria neste mês — revê em <b>Movimentos</b>.</div>`:''}
     <div class="grid">${cards.map(c=>`<div class="card"><h3>${c[0]}</h3><div class="big">${c[1]}</div><div class="sub">${c[2]}</div></div>`).join('')}</div>
+    ${overBud.length ? `<div class="card warn" style="margin-bottom:12px">Acima do orçamento: ${overBud.map(b=>`${esc(b.category)} (+${eur(-b.left)})`).join(' · ')}</div>`:''}
+    ${budCard}
     ${bal}
     ${evCard}
     <div class="row2">
@@ -333,7 +360,7 @@ async function loadSim(){
       ${card('Ponto mais baixo', `<span class="${r.min_balance<r.floor?'down':''}">${eur(r.min_balance)}</span>`, `a ${dmy(r.min_date)}`)}
       ${card('Abaixo do limite', below ? `<span class="down">${dmy(below)}</span>` : '<span class="up">nunca</span>', `limite ${eur(r.floor)}`)}</div>
       <div class="card" style="margin-top:12px"><h2>Saldo previsto</h2><div class="chartbox"><canvas id="c5"></canvas></div>
-        <div class="sub" style="margin-top:8px">Base: rendimento ~${eur(b.monthly_income)}/mês (costuma chegar ao dia ${b.income_day}), despesas ~${eur(b.monthly_expenses)}/mês${SIM.saving?`, investido ~${eur(b.monthly_invested)}/mês`:''} — médias dos últimos ${b.window_days} dias, sem os movimentos associados a eventos. As despesas são espalhadas por igual pelos dias, por isso o mínimo é aproximado.${b.thin?' <span class="warn">Histórico curto: estimativa fraca.</span>':''}${r.ignored?` ${r.ignored} item(ns) planeado(s) com data até ao último movimento ignorado(s) (já contam no saldo).`:''}</div>
+        <div class="sub" style="margin-top:8px">Base: rendimento ~${eur(b.monthly_income)}/mês (costuma chegar ao dia ${b.income_day}), despesas ~${eur(b.monthly_expenses)}/mês${SIM.saving?`, investido ~${eur(b.monthly_invested)}/mês`:''} — médias dos últimos ${b.window_days} dias, sem os movimentos associados a eventos. ${b.recurring.length ? `Despesas fixas que saem no seu dia: ${b.recurring.map(x=>`${esc(x.name)} ${eur(x.amount)} (dia ${x.day})`).join(', ')}. O resto (~${eur(Math.max(0,b.monthly_expenses-b.recurring_monthly))}/mês) é espalhado pelos dias, por isso o mínimo é aproximado.` : 'Ainda sem despesas fixas detetadas (precisam de 3 meses com valor estável): as despesas são espalhadas pelos dias, por isso o mínimo é aproximado.'}${b.thin?' <span class="warn">Histórico curto: estimativa fraca.</span>':''}${r.ignored?` ${r.ignored} item(ns) planeado(s) com data até ao último movimento ignorado(s) (já contam no saldo).`:''}</div>
         ${r.impact.length?`<div class="sub" style="margin-top:6px">Impacto no saldo final: ${r.impact.map(i=>`${esc(i.event)} ${eur(i.amount)}`).join(' · ')}</div>`:''}</div>`;
   }
   const goals = r.empty ? (await api('/goals')).map(g=>({...g, status:'nodata'})) : r.goals;
@@ -597,7 +624,7 @@ const CKIND = {expense:'Despesa', income:'Rendimento', saving:'Investimento/poup
 const CBUCKET = {needs:'Necessidade', wants:'Desejo', other:'Outro'};
 async function loadConfig(){
   S.meta = await api('/meta');
-  const rules = await api('/rules');
+  const [rules, bks] = await Promise.all([api('/rules'), api('/backups')]);
   const cats = S.meta.categories.map(c=>c.name);
   $('#config').innerHTML = `
     <div class="card"><h2>Contas</h2>${S.meta.accounts.length?`<table><thead><tr><th>Conta</th><th>Tipo</th><th class="num">Saldo inicial (€)</th><th></th></tr></thead><tbody>${S.meta.accounts.map(a=>`<tr>
@@ -607,11 +634,12 @@ async function loadConfig(){
       <td class="num"><button class="btn" data-s="${a.id}">Guardar</button></td></tr>`).join('')}</tbody></table>
       <div class="sub" style="margin-top:8px">O saldo inicial é o saldo da conta antes do primeiro movimento importado. Sem ele, runway e património ficam errados.</div>`:'<div class="sub">Sem contas ainda — importa um extrato.</div>'}</div>
     <div class="card" style="margin-top:12px"><h2>Categorias</h2>
-      <table><thead><tr><th>Categoria</th><th>Tipo</th><th>50/30/20</th><th>Fixa</th><th></th></tr></thead><tbody>${S.meta.categories.filter(c=>c.name!=='Sem categoria').map(c=>`<tr data-cat="${esc(c.name)}">
+      <table><thead><tr><th>Categoria</th><th>Tipo</th><th>50/30/20</th><th>Fixa</th><th class="num">Orçamento/mês</th><th></th></tr></thead><tbody>${S.meta.categories.filter(c=>c.name!=='Sem categoria').map(c=>`<tr data-cat="${esc(c.name)}">
         <td>${esc(c.name)}${c.custom?' <span class="badge">tua</span>':''}</td>
         <td><select data-ck>${Object.entries(CKIND).map(([k,v])=>`<option value="${k}" ${c.kind===k?'selected':''}>${v}</option>`).join('')}</select></td>
         <td><select data-cb>${Object.entries(CBUCKET).map(([k,v])=>`<option value="${k}" ${c.bucket===k?'selected':''}>${v}</option>`).join('')}</select></td>
         <td><input type="checkbox" data-cf ${c.fixed?'checked':''}></td>
+        <td class="num"><input type="number" min="0" step="10" data-cbud value="${c.budget ?? ''}" placeholder="–" style="width:90px;text-align:right"></td>
         <td class="num">${c.custom?'<button class="btn" data-cdel>×</button>':''}</td></tr>`).join('')}</tbody></table>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
         <input id="cn" placeholder="Nova categoria (ex.: Animais)" style="flex:1;min-width:160px">
@@ -619,7 +647,12 @@ async function loadConfig(){
         <select id="cb">${Object.entries(CBUCKET).map(([k,v])=>`<option value="${k}" ${k==='wants'?'selected':''}>${v}</option>`).join('')}</select>
         <label class="sub"><input id="cf" type="checkbox"> fixa</label>
         <button class="btn primary" id="cadd">Criar</button></div>
-      <div class="sub" style="margin-top:6px">Tipo decide como entra nos KPIs; 50/30/20 é para a distribuição do rendimento; fixa conta para as despesas fixas. As categorias de origem editam-se mas não se apagam. Ao apagar uma tua, os movimentos dela passam a "Sem categoria".</div></div>
+      <div class="sub" style="margin-top:6px">Tipo decide como entra nos KPIs; 50/30/20 é para a distribuição do rendimento; fixa conta para as despesas fixas; o orçamento mensal aparece na Visão geral (vazio ou 0 = sem orçamento). As categorias de origem editam-se mas não se apagam. Ao apagar uma tua, os movimentos dela passam a "Sem categoria".</div></div>
+    <div class="card" style="margin-top:12px"><h2>Backups</h2>
+      <div class="sub" style="margin-bottom:8px">Antes de cada importação, de remover uma importação ou de apagar uma categoria é feita uma cópia automática da base de dados em <code>data/backups/</code>. Ficam as 10 mais recentes.</div>
+      ${bks.length ? `<table><tbody>${bks.map(b=>`<tr><td>${esc(b.created.replace('T',' '))}<div class="sub">${esc(b.name.replace(/^finance-\d{8}-\d{6}-\d+-|\.db$/g,'').replace(/-/g,' '))}</div></td><td class="num sub">${(b.size/1024).toFixed(0)} KB</td><td class="num"><a class="btn" href="/api/backups/${encodeURIComponent(b.name)}" download style="text-decoration:none">Descarregar</a></td></tr>`).join('')}</tbody></table>` : '<div class="sub">Ainda sem backups.</div>'}
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><button class="btn primary" id="bkmake">Fazer backup agora</button>
+        <span class="sub">Para repor: para a app, copia o ficheiro escolhido por cima de <code>data/finance.db</code> e volta a arrancar.</span></div></div>
     <div class="card" style="margin-top:12px"><h2>Regras de categorização</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="rp" placeholder="texto a procurar (ex.: continente)"><select id="rc">${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select><button class="btn primary" id="radd">Adicionar</button></div>
       <table><tbody>${rules.map(r=>`<tr><td>${esc(r.pattern)}</td><td>${esc(r.category)}</td><td class="num"><button class="btn" data-r="${r.id}">×</button></td></tr>`).join('')}</tbody></table></div>`;
@@ -628,6 +661,7 @@ async function loadConfig(){
     await api('/accounts/'+id, json('PUT',{opening_balance:+document.querySelector(`[data-o="${id}"]`).value||0, type:document.querySelector(`[data-t="${id}"]`).value}));
     b.textContent = 'Guardado ✓';
   });
+  $('#bkmake').onclick = async () => { try { await api('/backups', {method:'POST'}); loadConfig(); } catch(err){ alert(errText(err)); } };
   $('#cadd').onclick = async () => {
     if (!$('#cn').value.trim()) return;
     try { await api('/categories', json('POST', {name:$('#cn').value, kind:$('#ck').value, bucket:$('#cb').value, fixed:$('#cf').checked})); loadConfig(); }
@@ -635,8 +669,9 @@ async function loadConfig(){
   };
   document.querySelectorAll('[data-cat]').forEach(tr => {
     const name = tr.dataset.cat;
-    tr.querySelectorAll('[data-ck],[data-cb],[data-cf]').forEach(x => x.onchange = async () => {
-      try { await api('/categories/'+encodeURIComponent(name), json('PUT', {name, kind:tr.querySelector('[data-ck]').value, bucket:tr.querySelector('[data-cb]').value, fixed:tr.querySelector('[data-cf]').checked})); S.report = null; }
+    tr.querySelectorAll('[data-ck],[data-cb],[data-cf],[data-cbud]').forEach(x => x.onchange = async () => {
+      const bud = tr.querySelector('[data-cbud]').value;
+      try { await api('/categories/'+encodeURIComponent(name), json('PUT', {name, kind:tr.querySelector('[data-ck]').value, bucket:tr.querySelector('[data-cb]').value, fixed:tr.querySelector('[data-cf]').checked, budget: bud === '' ? null : +bud})); S.report = null; }
       catch(err){ alert(errText(err)); loadConfig(); }
     });
     const del = tr.querySelector('[data-cdel]');

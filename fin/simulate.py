@@ -5,7 +5,9 @@ Modelo (propositadamente simples, para se poder explicar):
 - base = médias da janela recente das contas 'liquid', SEM movimentos associados a eventos
   (esses são pontuais e entram pelos itens planeados, para não contar duas vezes):
     * rendimento: chega de uma vez, no dia do mês em que costuma chegar (mediana histórica);
-    * despesas (+ investido, opcional): espalhadas por igual pelos dias;
+    * despesas fixas recorrentes (mesma descrição, valor estável, ≥3 meses, vistas nos últimos
+      45 dias): saem no dia do mês em que costumam sair (ex.: renda ao dia 1);
+    * restantes despesas (+ investido, opcional): espalhadas por igual pelos dias;
 - itens planeados: contam na sua data, ponderados pela certeza.
 
 Horizonte: termina sempre num fim de mês. 0 = até ao fim deste mês (série diária);
@@ -28,15 +30,27 @@ def weight(certainty: str, amount: float, mode: str) -> float:
     return WEIGHTS.get(certainty, 1.0)
 
 
+RECURRING_ACTIVE_DAYS = 45  # um recorrente que não aparece há mais do que isto conta como cancelado
+
+
 def baseline(df: pd.DataFrame, window_days: int = 90, include_saving: bool = True) -> dict:
     end = df["date"].max()
     span = int((end - df["date"].min()).days) + 1
     days = max(1, min(window_days, span))
-    liq = df[(df["account_type"] == "liquid") & df["event_id"].isna() & (df["date"] > end - pd.Timedelta(days=days))]
+    own = df[(df["account_type"] == "liquid") & df["event_id"].isna()]
+    liq = own[own["date"] > end - pd.Timedelta(days=days)]
     months = days / 30.4375
     inc = liq[(liq["kind"] == "income") & (liq["amount"] > 0)]
     expenses = max(0.0, -liq.loc[liq["kind"] == "expense", "amount"].sum())
     invested = max(0.0, -liq.loc[liq["kind"] == "saving", "amount"].sum()) if include_saving else 0.0
+    active_since = (end - pd.Timedelta(days=RECURRING_ACTIVE_DAYS)).date().isoformat()
+    recurring = [
+        {"name": r["name"], "category": r["category"], "amount": r["monthly"], "day": r["day"]}
+        for r in kpis._recurring(own) if r["last"] >= active_since
+    ]
+    # o que é fixo sai no seu dia; o resto das despesas continua espalhado (nunca abaixo de 0)
+    rec_monthly = sum(r["amount"] for r in recurring)
+    variable_monthly = max(0.0, expenses / months - rec_monthly)
     return {
         "window_days": days,
         "thin": span < 60,
@@ -44,7 +58,9 @@ def baseline(df: pd.DataFrame, window_days: int = 90, include_saving: bool = Tru
         "income_day": int(inc["date"].dt.day.median()) if len(inc) else 1,
         "monthly_expenses": expenses / months,
         "monthly_invested": invested / months,
-        "daily_outflow": (expenses + invested) / days,
+        "recurring": recurring,
+        "recurring_monthly": rec_monthly,
+        "daily_outflow": (variable_monthly + invested / months) / 30.4375,
     }
 
 
@@ -97,6 +113,9 @@ def run(tx, cats, accounts, planned, horizon_months=0, floor=0.0, mode="expected
         bal -= b["daily_outflow"]
         if d.day == min(b["income_day"], d.days_in_month):
             bal += b["monthly_income"]
+        for r in b["recurring"]:
+            if d.day == min(r["day"], d.days_in_month):
+                bal -= r["amount"]
         bal += by_day.get(d, 0.0)
         all_dates.append(d)
         all_balance.append(bal)

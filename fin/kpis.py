@@ -42,7 +42,8 @@ def _recurring(df: pd.DataFrame) -> list[dict]:
         if amts.std(ddof=0) / amts.mean() > 0.15:
             continue
         monthly = amts.groupby(g["month"]).sum().mean()
-        out.append({"name": g["description"].iloc[0], "category": g["category"].iloc[0], "monthly": monthly, "annual": monthly * 12, "months": int(months)})
+        out.append({"name": g["description"].iloc[0], "category": g["category"].iloc[0], "monthly": monthly, "annual": monthly * 12, "months": int(months),
+                    "day": int(g["date"].dt.day.median()), "last": g["date"].max().date().isoformat()})
     return sorted(out, key=lambda r: -r["annual"])
 
 
@@ -99,6 +100,17 @@ def report(tx: pd.DataFrame, cats: pd.DataFrame, accounts: pd.DataFrame, month: 
     big = m[(m.kind == "expense") & (m.amount < 0)].nsmallest(5, "amount")
     recurring = _recurring(df)
 
+    # orçamentos mensais por categoria (todos os movimentos do mês, incluindo os de eventos)
+    today = pd.Timestamp.today()
+    elapsed = min(1.0, today.day / today.days_in_month) if month == today.strftime("%Y-%m") else 1.0
+    budgets = []
+    if "budget" in cats.columns:
+        for row in cats[cats["budget"].fillna(0) > 0].itertuples():
+            spent = float(-m.loc[m.category == row.name, "amount"].sum())
+            budgets.append({"category": row.name, "budget": row.budget, "spent": spent, "left": row.budget - spent,
+                            "pct": spent / row.budget, "over_pace": spent > row.budget * elapsed})
+        budgets.sort(key=lambda b: -b["pct"])
+
     cv = last6["income"].std(ddof=0) / last6["income"].mean() if len(last6) >= 3 and last6["income"].mean() > 0 else np.nan
 
     return _clean(
@@ -136,6 +148,8 @@ def report(tx: pd.DataFrame, cats: pd.DataFrame, accounts: pd.DataFrame, month: 
             "category_trend": {"months": list(last6.index), "series": trend},
             "biggest": [{"date": r.date.date().isoformat(), "description": r.description, "amount": -r.amount, "category": r.category} for r in big.itertuples()],
             "recurring": recurring[:10],
+            "budgets": budgets,
+            "month_elapsed": elapsed,
             "balances": [{"account": a, "type": atype[a], "balance": b} for a, b in balances.items()],
         }
     )
