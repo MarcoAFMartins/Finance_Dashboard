@@ -251,7 +251,7 @@ async function renderTx(){
 }
 
 // ---------- simular ----------
-const SIM = {h:6, floor:+(localStorage.getItem('simFloor')||0), mode:'expected', saving:true};
+const SIM = {h:0, floor:+(localStorage.getItem('simFloor')||0), mode:'expected', saving:true};
 const CERT = {certain:'certo', likely:'provável', maybe:'talvez'};
 const STAT = {planned:'planeado', active:'em curso', done:'feito'};
 const dmy = d => d ? d.slice(8)+'/'+d.slice(5,7)+'/'+d.slice(2,4) : '–';
@@ -302,7 +302,7 @@ async function loadSim(){
   const el = $('#sim'), y = window.scrollY;
   const card = (h, v, s) => `<div class="card"><h3>${h}</h3><div class="big">${v}</div><div class="sub">${s}</div></div>`;
   const ctrl = `<div class="card" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
-    <label>Horizonte <select id="sh">${[3,6,12,24].map(m=>`<option value="${m}" ${SIM.h===m?'selected':''}>${m} meses</option>`).join('')}</select></label>
+    <label>Horizonte <select id="sh">${[0,3,6,12].map(m=>`<option value="${m}" ${SIM.h===m?'selected':''}>${m?m+' meses (mês a mês)':'até ao fim do mês'}</option>`).join('')}</select></label>
     <label title="O saldo previsto fica sinalizado quando desce abaixo deste valor">Limite <input id="sf" type="number" step="50" value="${SIM.floor}" style="width:90px"> €</label>
     <label title="Esperado: itens ponderados pela certeza (provável 70%, talvez 30%). Pessimista: todas as despesas a 100% e só as entradas certas.">Cenário <select id="sm"><option value="expected" ${SIM.mode==='expected'?'selected':''}>Esperado</option><option value="pessimistic" ${SIM.mode==='pessimistic'?'selected':''}>Pessimista</option></select></label>
     <label title="Se ligado, o ritmo mensal de investimento/poupança das contas à ordem sai do saldo previsto."><input id="ss" type="checkbox" ${SIM.saving?'checked':''}> contar investimento mensal como saída</label></div>`;
@@ -331,11 +331,11 @@ async function loadSim(){
   window.scrollTo(0, y);
 
   if (!r.empty) {
-    const dates = r.series.dates, hasItem = new Set(r.items.map(i=>i.date));
+    const dates = r.series.dates, hasItem = r.series.has_item, monthly = r.step === 'month';
     chart('c5', {type:'line', data:{labels:dates, datasets:[
-      {label:'Saldo previsto', data:r.series.balance, borderColor:css('--accent'), backgroundColor:css('--accent')+'22', fill:true, pointRadius:0, tension:.15, borderWidth:2},
+      {label:'Saldo previsto', data:r.series.balance, borderColor:css('--accent'), backgroundColor:css('--accent')+'22', fill:true, pointRadius:monthly?3:0, tension:.15, borderWidth:2},
       {label:'Limite', data:dates.map(()=>r.floor), borderColor:css('--neg'), borderDash:[6,4], pointRadius:0, borderWidth:1.5},
-      {label:'Itens planeados', data:dates.map((d,i)=>hasItem.has(d)?r.series.balance[i]:null), showLine:false, borderColor:css('--warn'), backgroundColor:css('--warn'), pointRadius:5}]},
+      {label:'Itens planeados', data:dates.map((d,i)=>hasItem[i]?r.series.balance[i]:null), showLine:false, borderColor:css('--warn'), backgroundColor:css('--warn'), pointRadius:5}]},
       options:{maintainAspectRatio:false, interaction:{mode:'index', intersect:false}, scales:{x:{ticks:{maxTicksLimit:8, callback(v){ return dmy(this.getLabelForValue(v)); }}}, y:{ticks:{callback:v=>eur(v)}}}}});
   }
   $('#sh').onchange = e => { SIM.h = +e.target.value; loadSim(); };

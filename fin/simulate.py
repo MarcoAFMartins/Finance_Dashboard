@@ -7,6 +7,11 @@ Modelo (propositadamente simples, para se poder explicar):
     * rendimento: chega de uma vez, no dia do mês em que costuma chegar (mediana histórica);
     * despesas (+ investido, opcional): espalhadas por igual pelos dias;
 - itens planeados: contam na sua data, ponderados pela certeza.
+
+Horizonte: termina sempre num fim de mês. 0 = até ao fim deste mês (série diária);
+N > 0 = até ao fim do N-ésimo mês seguinte (série mês a mês, um ponto por fim de mês).
+"Este mês" é o de hoje, ou o do último movimento se for mais recente. O cálculo é sempre
+diário por dentro, para o ponto mais baixo e a data abaixo do limite não se perderem entre pontos.
 """
 import pandas as pd
 
@@ -43,7 +48,7 @@ def baseline(df: pd.DataFrame, window_days: int = 90, include_saving: bool = Tru
     }
 
 
-def run(tx, cats, accounts, planned, horizon_months=6, floor=0.0, mode="expected", include_saving=True, window_days=90) -> dict:
+def run(tx, cats, accounts, planned, horizon_months=0, floor=0.0, mode="expected", include_saving=True, window_days=90, today=None) -> dict:
     if tx.empty:
         return {"empty": True}
     df = kpis._prepare(tx, cats)
@@ -56,7 +61,8 @@ def run(tx, cats, accounts, planned, horizon_months=6, floor=0.0, mode="expected
     )
 
     start = df["date"].max().normalize()
-    end = start + pd.DateOffset(months=horizon_months)
+    anchor = max(start, pd.Timestamp(today or pd.Timestamp.today()).normalize())
+    end = anchor + pd.offsets.MonthEnd(0) + pd.offsets.MonthEnd(horizon_months)
 
     items, ignored = [], 0
     for p in planned:
@@ -89,6 +95,12 @@ def run(tx, cats, accounts, planned, horizon_months=6, floor=0.0, mode="expected
     low = min(range(len(balance)), key=balance.__getitem__)
     below = next((dates[i] for i, v in enumerate(balance) if v < floor), None)
 
+    # série devolvida: diária até ao fim deste mês; mês a mês (início + cada fim de mês) para horizontes maiores
+    step = "day" if horizon_months == 0 else "month"
+    keep = [i for i, d in enumerate(dates) if step == "day" or i == 0 or d.is_month_end]
+    # cada ponto marca se há itens planeados desde o ponto anterior
+    has_item = [False] + [any(dates[a] < d <= dates[b] for d in by_day) for a, b in zip(keep, keep[1:])]
+
     impact: dict[str, float] = {}
     for it in items:
         key = it["event"] or "Avulsos"
@@ -109,7 +121,13 @@ def run(tx, cats, accounts, planned, horizon_months=6, floor=0.0, mode="expected
             "baseline": b,
             "planned_total": sum(it["effective"] for it in items),
             "ignored": ignored,
-            "series": {"dates": [d.date().isoformat() for d in dates], "balance": [round(v, 2) for v in balance]},
+            "horizon_months": horizon_months,
+            "step": step,
+            "series": {
+                "dates": [dates[i].date().isoformat() for i in keep],
+                "balance": [round(balance[i], 2) for i in keep],
+                "has_item": has_item,
+            },
             "items": [
                 {"date": it["date"], "description": it["description"], "event": it["event"], "category": it["category"],
                  "certainty": it["certainty"], "amount": it["amount"], "effective": it["effective"]}

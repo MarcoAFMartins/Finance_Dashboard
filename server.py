@@ -372,13 +372,13 @@ def delete_planned(pid: int):
 
 
 @app.get("/api/simulate")
-def simulate(horizon_months: int = 6, floor: float = 0.0, mode: str = "expected", include_saving: bool = True):
+def simulate(horizon_months: int = 0, floor: float = 0.0, mode: str = "expected", include_saving: bool = True):
     if mode not in sim.MODES:
         raise HTTPException(422, "mode deve ser expected ou pessimistic")
     with db.connect() as c:
         return sim.run(
             db.load_transactions(c), db.load_table(c, "categories"), db.load_table(c, "accounts"),
-            events.planned_for_sim(c), max(1, min(horizon_months, 24)), floor, mode, include_saving,
+            events.planned_for_sim(c), max(0, min(horizon_months, 12)), floor, mode, include_saving,
         )
 
 

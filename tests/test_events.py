@@ -98,7 +98,21 @@ def main():
         base_without = run_sim(c, horizon_months=3)["baseline"]["monthly_expenses"]
         events.assign(c, ids, eid)
         assert base_without >= base_with, "movimentos de eventos saem da base"
-        assert r0["planned_total"] == 0 and len(r0["series"]["dates"]) == len(r0["series"]["balance"]) > 80
+        assert r0["planned_total"] == 0 and len(r0["series"]["dates"]) == len(r0["series"]["balance"]) == len(r0["series"]["has_item"])
+
+        # --- horizonte: termina num fim de mês; 0 = este mês (diário), N = mês a mês ---
+        import datetime as _dt
+        last = _dt.date.fromisoformat(r0["start_date"])
+        m0 = run_sim(c, horizon_months=0, today=last)
+        nxt = (last.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+        assert m0["step"] == "day" and m0["end_date"] == (nxt - _dt.timedelta(days=1)).isoformat(), m0["end_date"]
+        assert len(m0["series"]["dates"]) == (nxt - last).days, "um ponto por dia até ao fim do mês"
+        m3 = run_sim(c, horizon_months=3, today=last)
+        assert m3["step"] == "month" and len(m3["series"]["dates"]) == 5, m3["series"]["dates"]  # início + 4 fins de mês
+        assert all(_dt.date.fromisoformat(x).month != (_dt.date.fromisoformat(x) + _dt.timedelta(days=1)).month for x in m3["series"]["dates"][1:])
+        assert m3["series"]["balance"][-1] == round(m3["final_balance"], 2)
+        later = run_sim(c, horizon_months=0, today=last + _dt.timedelta(days=60))
+        assert later["end_date"] > m0["end_date"], "'este mês' é o de hoje quando os dados estão atrasados"
 
         # --- itens planeados: ponderação por certeza ---
         start = r0["start_date"]
